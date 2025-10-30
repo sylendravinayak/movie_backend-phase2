@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package payments;
+
+
+service PaymentService {
+
+  rpc CreatePayment(CreatePaymentReq) returns (CreatePaymentRes);
+}
+
+message CreatePaymentReq {
+  int32 booking_id = 1;
+  string booking_reference = 2; // idempotency key
+  int64 amount = 3;             // amount in paise / cents (integer)
+  int32 user_id = 4;
+}
+
+message CreatePaymentRes {
+  int32 payment_id = 1;
+  string status = 2; // SUCCESS, FAILED
+  string message = 3;
+}

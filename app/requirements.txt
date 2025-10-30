@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+pydantic[email]
+sqlalchemy
+psycopg2
+josh
+passlib[bcrypt]
+python-multipart
+motor
