@@ -27,6 +27,7 @@ class Seat(Base):
 class SeatLockStatusEnum(str, Enum):
     LOCKED = "LOCKED"
     BOOKED = "BOOKED"
+    EXPIRED = "EXPIRED"
 
 
 # ---------------------------------------------------------------------------

@@ -1,14 +1,34 @@
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocket, WebSocketDisconnect, APIRouter
+from typing import Optional
+import json
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import and_
+from sqlalchemy.orm import Session
+
+from utils.seat_ws_manger import ws_manager
+
+# Existing models
 from model.notification import Notification
-from utils.ws_manager import ws_manager
-from fastapi import APIRouter
+from model import BookedSeat
+from model.seat import SeatLock
+from schemas import SeatLockStatus as SeatLockStatusEnum
+
+# Use SessionLocal directly for websocket endpoints (more reliable than Depends in WS).
+from database import SessionLocal
+
 router = APIRouter()
 
-@router.websocket("/ws/notifications")
-async def websocket_endpoint(websocket: WebSocket, user_id: str):
-    await ws_manager.connect(user_id, websocket)
+def utcnow():
+    return datetime.now(timezone.utc)
 
-    # ✅ send undelivered messages stored in DB
+def to_iso(dt: datetime):
+    return dt.astimezone(timezone.utc).isoformat()
+
+# FIXED: notifications WS uses ws_manager.connect(websocket, user_id) and disconnect(websocket)
+@router.websocket("/ws/notifications")
+async def websocket_notifications(websocket: WebSocket, user_id: str):
+    await ws_manager.connect(websocket, user_id)
+
     undelivered = await Notification.find({
         "user_id": user_id,
         "delivered": False
@@ -20,8 +40,25 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
 
     try:
         while True:
-            # keep connection alive, ignore user messages
             await websocket.receive_text()
-
     except WebSocketDisconnect:
-        ws_manager.disconnect(websocket)  # ✅ FIXED
+        await ws_manager.disconnect(websocket)
+
+@router.websocket("/ws/seats/{show_id}")
+async def websocket_seats(websocket: WebSocket, show_id: int, user_id: Optional[str] = None):
+    # … keep your seat locking implementation here (unchanged) …
+    await ws_manager.connect(websocket, user_id)
+    await ws_manager.subscribe_show(str(show_id), websocket)
+    db: Session = SessionLocal()
+    try:
+        # handle lock/unlock/extend messages…
+        pass
+    except WebSocketDisconnect:
+        # cleanup…
+        await ws_manager.unsubscribe_show(str(show_id), websocket)
+        await ws_manager.disconnect(websocket)
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass

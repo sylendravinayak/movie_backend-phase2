@@ -1,14 +1,7 @@
 from model.notification import Notification
 from utils.ws_manager import ws_manager
 
-async def send_notification(user_id: str, message: str):
-    delivered = await ws_manager.send_personal_message(user_id, message)
-
-    if not delivered:  
-        notif = Notification(
-            user_id=user_id,
-            message=message,
-            notification_type="INFO",
-            delivered=False
-        )
-        await notif.insert()
+# Sends to all active websocket connections for the user_id.
+# Returns True if at least one socket received the message.
+async def send_notification(user_id: str | int, message: str) -> bool:
+    return await ws_manager.send_personal_message(str(user_id), message)

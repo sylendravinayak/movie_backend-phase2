@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Seat Map - Realtime Locking Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0e1116;
+      --panel: #161a22;
+      --text: #e6edf3;
+      --muted: #9ca3af;
+      --available: #10b981; /* green */
+      --locked: #f59e0b;    /* amber */
+      --mine: #3b82f6;      /* blue */
+      --booked: #ef4444;    /* red */
+      --border: #2a2f3a;
+    }
+    html, body {
+      margin: 0; padding: 0; background: var(--bg); color: var(--text);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+    }
+    .container {
+      max-width: 1100px; margin: 24px auto; padding: 16px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px; padding: 16px 18px; margin-bottom: 16px;
+    }
+    .row {
+      display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    }
+    label {
+      color: var(--muted); font-size: 14px; margin-right: 8px;
+    }
+    input, select, button {
+      background: #0b0f14; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+      outline: none;
+    }
+    button.primary {
+      background: #2563eb; border-color: #1d4ed8; cursor: pointer;
+    }
+    button.primary:hover { background: #1d4ed8; }
+    .legend { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; font-size: 14px; color: var(--muted); }
+    .legend .dot { width: 14px; height: 14px; border-radius: 4px; display: inline-block; margin-right: 6px; vertical-align: middle; }
+    .seat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+      gap: 10px; padding: 16px; background: #0b0f14; border-radius: 12px; border: 1px solid var(--border);
+      min-height: 200px;
+    }
+    .seat {
+      height: 44px; border-radius: 10px; border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 600; cursor: pointer; user-select: none;
+      transition: transform 0.05s ease, box-shadow 0.15s ease, filter 0.15s ease;
+    }
+    .seat.available { background: #0a1a14; color: var(--available); }
+    .seat.available:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(16,185,129,0.15); }
+    .seat.locked { background: #1d1606; color: var(--locked); cursor: not-allowed; filter: saturate(0.8); }
+    .seat.mine   { background: #0a162b; color: var(--mine); box-shadow: inset 0 0 0 1px #1e40af; }
+    .seat.booked { background: #1f0c0c; color: var(--booked); cursor: not-allowed; filter: grayscale(0.2) contrast(1.05); }
+    .screen {
+      text-align: center; padding: 8px; margin-bottom: 12px; color: var(--muted); font-weight: 600; letter-spacing: 1px;
+      border-bottom: 1px dashed var(--border);
+    }
+    .toast {
+      position: fixed; right: 16px; bottom: 16px;
+      background: #111827; color: #e5e7eb; padding: 10px 12px; border-radius: 10px; border: 1px solid #374151; max-width: 380px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.35);
+      font-size: 14px;
+    }
+    .muted { color: var(--muted); }
+    .spacer { height: 8px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="row">
+        <label>API Base</label><input id="apiBase" value="http://127.0.0.1:8000" size="26" />
+        <label>WS Base</label><input id="wsBase" value="ws://127.0.0.1:8000" size="24" />
+        <label>Show ID</label><input id="showId" value="9" size="6" />
+        <label>User ID</label><input id="userId" value="1" size="6" />
+        <button class="primary" id="connectBtn">Connect / Reload</button>
+      </div>
+      <div class="spacer"></div>
+      <div class="legend">
+        <span><span class="dot" style="background:#0a1a14;border:1px solid #1e293b"></span>Available</span>
+        <span><span class="dot" style="background:#0a162b;border:1px solid #1e3a8a"></span>My Lock</span>
+        <span><span class="dot" style="background:#1d1606;border:1px solid #92400e"></span>Locked (other)</span>
+        <span><span class="dot" style="background:#1f0c0c;border:1px solid #7f1d1d"></span>Booked</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="screen">SCREEN</div>
+      <div id="seatGrid" class="seat-grid"></div>
+      <div class="spacer"></div>
+      <div class="muted" id="statusLine">Status: disconnected</div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" style="display:none;"></div>
+
+  <script>
+    const seatGrid = document.getElementById('seatGrid');
+    const statusLine = document.getElementById('statusLine');
+    const connectBtn = document.getElementById('connectBtn');
+    const toastEl = document.getElementById('toast');
+
+    let API_BASE = document.getElementById('apiBase').value.trim();
+    let WS_BASE = document.getElementById('wsBase').value.trim();
+    let showId = parseInt(document.getElementById('showId').value.trim(), 10);
+    let userId = document.getElementById('userId').value.trim();
+
+    let ws = null;
+    const seatsIndex = new Map(); // seat_id -> element
+    const myLockedSeats = new Set(); // seat_ids I currently hold
+    const otherLockedSeats = new Set(); // seat_ids others hold
+    const bookedSeats = new Set(); // seat_ids booked
+    let extendTimer = null;
+
+    function setStatus(msg) {
+      statusLine.textContent = 'Status: ' + msg;
+    }
+
+    function showToast(msg, timeout=2600) {
+      toastEl.textContent = msg;
+      toastEl.style.display = 'block';
+      setTimeout(() => toastEl.style.display = 'none', timeout);
+    }
+
+    function classify(el, cls) {
+      el.classList.remove('available','locked','mine','booked');
+      el.classList.add(cls);
+    }
+
+    function markAvailable(seatId) {
+      const el = seatsIndex.get(seatId);
+      if (!el) return;
+      if (bookedSeats.has(seatId)) return; // booked overrides everything
+      if (myLockedSeats.has(seatId) || otherLockedSeats.has(seatId)) return; // another state applies
+      classify(el, 'available');
+      el.dataset.state = 'available';
+    }
+
+    function markMine(seatId) {
+      const el = seatsIndex.get(seatId);
+      if (!el) return;
+      classify(el, 'mine');
+      el.dataset.state = 'mine';
+    }
+
+    function markLocked(seatId) {
+      const el = seatsIndex.get(seatId);
+      if (!el) return;
+      if (myLockedSeats.has(seatId)) return; // mine takes precedence
+      classify(el, 'locked');
+      el.dataset.state = 'locked';
+    }
+
+    function markBooked(seatId) {
+      const el = seatsIndex.get(seatId);
+      if (!el) return;
+      bookedSeats.add(seatId);
+      classify(el, 'booked');
+      el.dataset.state = 'booked';
+      myLockedSeats.delete(seatId);
+      otherLockedSeats.delete(seatId);
+    }
+
+    function wireSeatClick(el, seatId) {
+      el.addEventListener('click', () => {
+        const state = el.dataset.state || 'available';
+        if (state === 'booked') return;
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          showToast('WebSocket is not connected');
+          return;
+        }
+        if (state === 'available') {
+          // Try lock
+          ws.send(JSON.stringify({ action: 'lock', seat_id: seatId, ttl: 30 }));
+        } else if (state === 'mine') {
+          // Unlock my lock
+          ws.send(JSON.stringify({ action: 'unlock', seat_id: seatId }));
+        } else if (state === 'locked') {
+          showToast('Seat locked by another user');
+        }
+      });
+    }
+
+    function buildGrid(seats) {
+      seatGrid.innerHTML = '';
+      seatsIndex.clear();
+      // order: by row_number then col_number then seat_id fallback
+      seats.sort((a,b) => {
+        const ar = a.row_number ?? 0, br = b.row_number ?? 0;
+        if (ar !== br) return ar - br;
+        const ac = a.col_number ?? 0, bc = b.col_number ?? 0;
+        if (ac !== bc) return ac - bc;
+        return a.seat_id - b.seat_id;
+      });
+      for (const s of seats) {
+        const el = document.createElement('div');
+        el.className = 'seat available';
+        el.dataset.seatId = s.seat_id;
+        el.dataset.state = 'available';
+        el.textContent = s.seat_number || s.seat_id;
+        wireSeatClick(el, s.seat_id);
+        seatsIndex.set(s.seat_id, el);
+        seatGrid.appendChild(el);
+      }
+    }
+
+    async function fetchJSON(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      return await res.json();
+    }
+
+    async function loadInitialState() {
+      // 1) seats universe (no show filter endpoint; assumes this screen's seats are relevant)
+      const seats = await fetchJSON(`${API_BASE}/seats`);
+      buildGrid(seats);
+
+      // 2) mark already booked for this show
+      const booked = await fetchJSON(`${API_BASE}/booked_seats?show_id=${showId}`);
+      for (const b of booked) {
+        markBooked(b.seat_id);
+      }
+
+      // 3) mark currently active locks (best-effort – we filter client-side)
+      // SeatLock doesn’t store user_id; we’ll mark them as "locked (other)" unless WS tells us it’s "mine".
+      try {
+        const locks = await fetchJSON(`${API_BASE}/seatlocks`);
+        const now = Date.now();
+        for (const L of locks) {
+          if (L.show_id === showId && L.status === 'LOCKED' && new Date(L.expires_at).getTime() > now) {
+            otherLockedSeats.add(L.seat_id);
+            markLocked(L.seat_id);
+          }
+        }
+      } catch (e) {
+        // optional endpoint; ignore failures
+      }
+    }
+
+    function connectWS() {
+      if (ws) {
+        try { ws.close(); } catch {}
+      }
+      ws = new WebSocket(`${WS_BASE}/ws/seats/${showId}?user_id=${encodeURIComponent(userId)}`);
+      ws.onopen = () => {
+        setStatus('connected');
+        // Start periodic extends for my locked seats
+        if (extendTimer) clearInterval(extendTimer);
+        extendTimer = setInterval(() => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          for (const seatId of myLockedSeats) {
+            ws.send(JSON.stringify({ action: 'extend', seat_id: seatId, ttl: 30 }));
+          }
+        }, 15000);
+      };
+      ws.onclose = () => {
+        setStatus('disconnected');
+        if (extendTimer) {
+          clearInterval(extendTimer);
+          extendTimer = null;
+        }
+      };
+      ws.onerror = () => setStatus('error');
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          // types: seat_lock, seat_unlock, seat_booked, error, pong
+          if (msg.type === 'seat_lock' && msg.show_id === showId) {
+            const seatId = msg.seat_id;
+            // If this lock was authored by me
+            if (String(msg.locked_by ?? '') === String(userId)) {
+              otherLockedSeats.delete(seatId);
+              myLockedSeats.add(seatId);
+              markMine(seatId);
+            } else {
+              if (!myLockedSeats.has(seatId)) {
+                otherLockedSeats.add(seatId);
+                markLocked(seatId);
+              }
+            }
+          } else if (msg.type === 'seat_unlock' && msg.show_id === showId) {
+            const seatId = msg.seat_id;
+            myLockedSeats.delete(seatId);
+            otherLockedSeats.delete(seatId);
+            markAvailable(seatId);
+          } else if (msg.type === 'seat_booked' && msg.show_id === showId) {
+            for (const seatId of msg.seat_ids || []) {
+              markBooked(seatId);
+            }
+          } else if (msg.type === 'error') {
+            showToast(msg.message || 'Error');
+          }
+        } catch (e) {
+          console.warn('Non-JSON WS message:', evt.data);
+        }
+      };
+    }
+
+    async function boot() {
+      // read current inputs
+      API_BASE = document.getElementById('apiBase').value.trim();
+      WS_BASE = document.getElementById('wsBase').value.trim();
+      showId = parseInt(document.getElementById('showId').value.trim(), 10);
+      userId = document.getElementById('userId').value.trim();
+
+      // reset state
+      myLockedSeats.clear();
+      otherLockedSeats.clear();
+      bookedSeats.clear();
+
+      setStatus('loading…');
+      try {
+        await loadInitialState();
+        setStatus('loaded (connecting WS…)');
+      } catch (e) {
+        setStatus('failed to load initial state');
+        showToast('Failed to load initial state: ' + e.message);
+      }
+      connectWS();
+    }
+
+    connectBtn.addEventListener('click', boot);
+    window.addEventListener('beforeunload', () => {
+      // Best-effort unlocks before closing (server also expires on disconnect)
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        for (const seatId of myLockedSeats) {
+          try { ws.send(JSON.stringify({ action: 'unlock', seat_id: seatId })); } catch {}
+        }
+      }
+    });
+
+    // Auto-start on page load
+    boot();
+  </script>
+</body>
+</html>

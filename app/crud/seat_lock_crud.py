@@ -5,13 +5,15 @@ from model.seat import SeatLock
 from schemas.seat_schema import SeatLockCreate, SeatLockUpdate
 from schemas import SeatLockStatus as SeatLockStatusEnum
 
-
 class SeatLockCRUD:
     def create(self, db: Session, obj_in: SeatLockCreate):
+        # Only consider ACTIVE locks (expires_at > now)
+        now = datetime.utcnow()
         existing_lock = db.query(SeatLock).filter(
             SeatLock.seat_id == obj_in.seat_id,
             SeatLock.show_id == obj_in.show_id,
-            SeatLock.status == SeatLockStatusEnum.LOCKED
+            SeatLock.status == SeatLockStatusEnum.LOCKED,
+            SeatLock.expires_at > now
         ).first()
         if existing_lock:
             raise HTTPException(
@@ -50,13 +52,14 @@ class SeatLockCRUD:
 
     def release_expired_locks(self, db: Session):
         now = datetime.utcnow()
+        # Delete rows instead of setting a non-existent EXPIRED enum
         expired_locks = db.query(SeatLock).filter(
             SeatLock.expires_at < now,
             SeatLock.status == SeatLockStatusEnum.LOCKED
         ).all()
 
         for lock in expired_locks:
-            lock.status = SeatLockStatusEnum.EXPIRED
+            db.delete(lock)
 
         if expired_locks:
             db.commit()

@@ -11,6 +11,7 @@ from proto import payment_pb2, payment_pb2_grpc
 
 class PaymentService(payment_pb2_grpc.PaymentServiceServicer):
     async def CreatePayment(self, request, context):
+        print(f"Received CreatePayment request: booking_reference={request.booking_reference}, amount={request.amount}")
         try:
             if request.amount <= 0:
                 return payment_pb2.CreatePaymentRes(
@@ -22,7 +23,6 @@ class PaymentService(payment_pb2_grpc.PaymentServiceServicer):
             def db_work():
                 db: Session = SessionLocal()
                 try:
-                    # Idempotency check
                     existing = db.query(Payment).filter(
                         Payment.transaction_code == request.booking_reference
                     ).first()
@@ -60,7 +60,7 @@ class PaymentService(payment_pb2_grpc.PaymentServiceServicer):
 async def serve():
     server = aio.server()
     payment_pb2_grpc.add_PaymentServiceServicer_to_server(PaymentService(), server)
-    server.add_insecure_port("[::]:50051")
+    server.add_insecure_port("127.0.0.1:50051")
 
     print("✅ Payment gRPC server listening on :50051")
     await server.start()

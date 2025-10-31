@@ -3,12 +3,7 @@ from ortools.sat.python import cp_model
 
 
 def generate_week_schedule(movies, screens, start_date, theatre_start, theatre_end, buffer=15):
-    """
-    Generate an optimized weekly schedule for all screens using OR-Tools.
-    movies: list of dicts [{id, duration}]
-    screens: list of dicts [{id}]
-    start_date: datetime.date
-    """
+
     model = cp_model.CpModel()
 
     def to_minutes(t: time):

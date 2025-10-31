@@ -4,7 +4,7 @@ from database import get_db
 from sqlalchemy.orm import Session
 from crud.booked_seat_crud import booked_seat_crud
 
-router = APIRouter(prefix="/bookingseats", tags=["Bookings"])
+router = APIRouter(prefix="/booked_seats", tags=["Bookings"])
 @router.get("/")
 def get_booked_seats(
     db: Session = Depends(get_db),
