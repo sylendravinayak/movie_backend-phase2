@@ -4,14 +4,13 @@ import grpc
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from typing import List, Optional
-#from grpc_module.proto import payment_pb2
 from database import get_db
 from crud.booking_crud import booking_crud
 from schemas.booking_schema import BookingCreate, BookingUpdate,BookingOut as BookingResponse
 from model import BookedSeat, BookedFood, Booking
 from psycopg2.errors import UniqueViolation
 from sqlalchemy.exc import IntegrityError
-#from grpc_module.proto import payment_pb2_grpc
+
 
 router = APIRouter(prefix="/bookings", tags=["Bookings"])
 def get_grpc_channel():
@@ -145,40 +144,11 @@ async def create_booking(obj: BookingCreate, db: Session = Depends(get_db)):
 
         if discount:
             total_amount -= (total_amount * discount / 100)
-
         booking.amount = total_amount
-        channel = get_grpc_channel()
         # Ensure channel is started
-        await channel.channel_ready()
-        stub = payment_pb2_grpc.PaymentServiceStub(channel)
-
-        req = payment_pb2.CreatePaymentReq(
-            booking_id=booking.booking_id,
-            booking_reference=booking.booking_reference,
-            amount=int(booking.amount),
-            user_id=booking.user_id
-        )
-
-        # timeout to avoid hanging
-        resp = await stub.CreatePayment(req, timeout=10.0)
-
-        if resp.status != "SUCCESS":
-            # Payment failed => mark booking as CANCELLED (or keep PENDING and retry)
-            booking.booking_status = "CANCELLED"
-            db.add(booking)
-            db.commit()
-            db.refresh(booking)
-            await channel.close()
-            raise HTTPException(status_code=400, detail=f"Payment failed: {resp.message}")
-
-        # 3) payment success — update booking with payment_id atomically
-        # You could run more checks here: verify payment record exists in payments DB
-        booking.payment_id = resp.payment_id
-        booking.booking_status = "CONFIRMED"
         db.add(booking)
         db.commit()
         db.refresh(booking)
-        await channel.close()
         return booking
     except IntegrityError as e:
         db.rollback()
