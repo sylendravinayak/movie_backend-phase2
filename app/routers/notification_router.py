@@ -34,15 +34,12 @@ async def test_notification(user_id: str, msg: str):
 async def get_notification(id: str):
     return await notification_crud.get(id)
 
-@router.patch("/{id}")
-async def update_notification(id: str, data: NotificationUpdate):
-    return await notification_crud.update(id, data)
 
 @router.delete("/{id}")
 async def delete_notification(id: str):
     return await notification_crud.remove(id)
 
-@router.post("/mark-all-read/{user_id}")
+@router.put("/mark-all-read/{user_id}")
 async def mark_all_read(user_id: str):
     await Notification.find({"user_id": user_id}).update({"$set": {"is_read": True}})
     return {"detail": "All notifications marked read"}

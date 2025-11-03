@@ -1,0 +1,291 @@
+{% set ws_base = ('ws://' ~ request.url.hostname ~ (':' ~ request.url.port if request.url.port else '')) %}
+{% set api_base = (request.url.scheme ~ '://' ~ request.url.hostname ~ (':' ~ request.url.port if request.url.port else '')) %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Seat Map – Show {{ show_id }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0e1116; --panel: #161a22; --text: #e6edf3; --muted: #9ca3af;
+      --available: #10b981; --locked: #f59e0b; --mine: #3b82f6; --booked: #ef4444; --border: #2a2f3a;
+      --accent: #22c55e; --accent-2: #2563eb;
+    }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial; }
+    .container { max-width: 1100px; margin: 20px auto 100px; padding: 0 12px; }
+
+    .venue-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .venue-title { font-weight: 700; font-size: 18px; }
+    .meta { color: var(--muted); font-size: 13px; }
+
+    .legend { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+    .dot { width: 14px; height: 14px; border-radius: 4px; display: inline-block; margin-right: 6px; vertical-align: middle; }
+    .legend .available { background:#0a1a14; border:1px solid #1e293b }
+    .legend .mine { background:#0a162b; border:1px solid #1e3a8a }
+    .legend .locked { background:#1d1606; border:1px solid #92400e }
+    .legend .booked { background:#1f0c0c; border:1px solid #7f1d1d }
+
+    .screen { text-align:center; padding: 6px; color: var(--muted); font-weight: 600; border-bottom: 1px dashed var(--border); margin: 8px 0 12px; }
+    .section { background: var(--panel); border:1px solid var(--border); border-radius: 12px; margin-bottom: 14px; overflow: hidden; }
+    .section-header { display:flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #10151d; border-bottom:1px solid var(--border); }
+    .section-title { font-weight: 700; }
+    .price { color: var(--muted); font-size: 14px; }
+
+    .seat-rows { padding: 12px; display: grid; gap: 10px; }
+    .row { display: grid; grid-template-columns: 36px 1fr; align-items: center; gap: 8px; }
+    .row-label { width: 36px; color: var(--muted); text-align: right; padding-right: 6px; }
+    .row-seats { display: grid; grid-auto-flow: column; grid-auto-columns: 44px; gap: 8px; }
+    .seat {
+      height: 44px; border-radius: 10px; border: 1px solid var(--border);
+      display:flex; align-items:center; justify-content:center; font-weight:600; cursor:pointer; user-select:none;
+      transition: transform 0.05s ease, box-shadow 0.15s ease, filter 0.15s ease;
+    }
+    .seat.available { background: #0a1a14; color: var(--available); }
+    .seat.available:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(16,185,129,0.15); }
+    .seat.locked { background: #1d1606; color: var(--locked); cursor: not-allowed; filter: saturate(0.8); }
+    .seat.mine { background: #0a162b; color: var(--mine); box-shadow: inset 0 0 0 1px #1e40af; }
+    .seat.booked { background: #1f0c0c; color: var(--booked); cursor: not-allowed; filter: grayscale(0.2) contrast(1.05); }
+
+    .bottom-bar {
+      position: fixed; left: 0; right: 0; bottom: 0; background: #0b0f14; border-top: 1px solid var(--border);
+      padding: 12px 16px; display:flex; justify-content: space-between; align-items: center; gap: 12px;
+    }
+    .selected { display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
+    .pill { background: #0f172a; border:1px solid #1f2937; padding: 6px 10px; border-radius: 999px; font-size: 13px; }
+    .btn { background: var(--accent-2); border:1px solid #1d4ed8; color: white; padding: 10px 14px; border-radius: 8px; cursor: pointer; font-weight: 700; }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="venue-header">
+      <div>
+        <div class="venue-title">Choose Seats</div>
+        <div class="meta">Show #{{ show_id }}</div>
+      </div>
+      <div class="legend">
+        <span><span class="dot available"></span>Available</span>
+        <span><span class="dot mine"></span>Selected</span>
+        <span><span class="dot locked"></span>Locked (other)</span>
+        <span><span class="dot booked"></span>Booked</span>
+      </div>
+    </div>
+
+    <div class="screen">SCREEN</div>
+
+    {# Group seats by category for sections #}
+    {% set seats_by_cat = {} %}
+    {% for s in seats %}
+      {% set _ = seats_by_cat.setdefault(s.category_id or -1, []).append(s) %}
+    {% endfor %}
+
+    {% for cat in categories %}
+      {% set cat_seats = seats_by_cat.get(cat.category_id, []) %}
+      <div class="section" data-category-id="{{ cat.category_id }}" data-category-name="{{ cat.category_name }}" data-category-price="{{ cat.price }}">
+        <div class="section-header">
+          <div class="section-title">{{ cat.category_name }}</div>
+          <div class="price">Rs {{ '%.0f'|format(cat.price) }}</div>
+        </div>
+        <div class="seat-rows">
+          {% set rows = {} %}
+          {% for s in cat_seats %}
+            {% set _ = rows.setdefault(s.row_number, []).append(s) %}
+          {% endfor %}
+          {% for row_no, row_seats in rows|dictsort %}
+            {% set row_label = ('ABCDEFGHIJKLMNOPQRSTUVWXYZ'[row_no - 1] if 1 <= row_no <= 26 else 'R' ~ row_no) %}
+            <div class="row" data-row="{{ row_no }}">
+              <div class="row-label">{{ row_label }}</div>
+              <div class="row-seats">
+                {% for seat in row_seats|sort(attribute='col_number') %}
+                  {% set state = 'available' %}
+                  {% if seat.seat_id in booked_ids %}
+                    {% set state = 'booked' %}
+                  {% else %}
+                    {% for l in locks %}
+                      {% if l.seat_id == seat.seat_id %}
+                        {% set state = ('mine' if l.user_id == user_id else 'locked') %}
+                      {% endif %}
+                    {% endfor %}
+                  {% endif %}
+                  <div class="seat {{ state }}"
+                       data-seat-id="{{ seat.seat_id }}"
+                       data-seat-number="{{ seat.seat_number }}"
+                       data-category-id="{{ seat.category_id }}"
+                       data-price="{{ seat.price }}"
+                  >{{ seat.seat_number }}</div>
+                {% endfor %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <div class="bottom-bar">
+    <div class="selected" id="selectedInfo">
+      <span class="meta">0 seats selected</span>
+    </div>
+    <div style="display:flex; gap:10px; align-items:center;">
+      <div id="total" class="pill">Total: Rs 0</div>
+      <button id="proceed" class="btn" disabled>Proceed</button>
+    </div>
+  </div>
+
+  <script>
+    const SHOW_ID = {{ show_id }};
+    const USER_ID = {{ user_id }};
+    const API_BASE = "{{ api_base }}";
+    const WS_BASE = "{{ ws_base }}";
+
+    const selectedInfo = document.getElementById('selectedInfo');
+    const totalEl = document.getElementById('total');
+    const proceedBtn = document.getElementById('proceed');
+
+    let ws = null;
+    const myLocked = new Set();
+    const selected = new Set();
+    let extendTimer = null;
+
+    function updateSummary() {
+      const ids = Array.from(selected);
+      const chips = ids.map(id => {
+        const el = document.querySelector(`.seat[data-seat-id="${id}"]`);
+        const label = el?.dataset.seatNumber || id;
+        return `<span class="pill">${label}</span>`;
+      }).join(" ");
+      const count = ids.length;
+      const sum = ids.reduce((acc, id) => {
+        const el = document.querySelector(`.seat[data-seat-id="${id}"]`);
+        const price = el ? Number(el.dataset.price || 0) : 0;
+        return acc + price;
+      }, 0);
+      selectedInfo.innerHTML = (count > 0)
+        ? `<span class="meta">${count} seat${count>1?'s':''} selected</span> ${chips}`
+        : `<span class="meta">0 seats selected</span>`;
+      totalEl.textContent = `Total: Rs ${sum.toFixed(0)}`;
+      proceedBtn.disabled = count === 0;
+    }
+
+    function classify(el, cls) {
+      el.classList.remove('available','locked','mine','booked');
+      el.classList.add(cls);
+    }
+
+    function bindSeatClicks() {
+      document.querySelectorAll('.seat').forEach(el => {
+        el.addEventListener('click', () => {
+          const seatId = Number(el.dataset.seatId);
+          const state = el.classList.contains('booked') ? 'booked'
+                       : el.classList.contains('locked') ? 'locked'
+                       : el.classList.contains('mine') ? 'mine' : 'available';
+          if (!ws || ws.readyState !== WebSocket.OPEN) { alert("WebSocket not connected"); return; }
+          if (state === 'available') {
+            ws.send(JSON.stringify({ action: 'lock', seat_id: seatId, ttl: 30 }));
+          } else if (state === 'mine') {
+            ws.send(JSON.stringify({ action: 'unlock', seat_id: seatId }));
+          }
+        });
+      });
+    }
+
+    function connectWS() {
+      if (ws) { try { ws.close(); } catch {} }
+      ws = new WebSocket(`${WS_BASE}/ws/seats/${SHOW_ID}?user_id=${encodeURIComponent(USER_ID)}`);
+
+      ws.onopen = () => {
+        // extend locks periodically
+        if (extendTimer) clearInterval(extendTimer);
+        extendTimer = setInterval(() => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          for (const id of myLocked) {
+            ws.send(JSON.stringify({ action: 'extend', seat_id: id, ttl: 30 }));
+          }
+        }, 15000);
+      };
+
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg.type === 'seat_lock' && msg.show_id === SHOW_ID) {
+            const el = document.querySelector(`.seat[data-seat-id="${msg.seat_id}"]`);
+            if (!el) return;
+            if (String(msg.locked_by) === String(USER_ID)) {
+              myLocked.add(msg.seat_id);
+              selected.add(msg.seat_id);
+              classify(el, 'mine');
+            } else {
+              if (!myLocked.has(msg.seat_id)) {
+                classify(el, 'locked');
+              }
+            }
+            updateSummary();
+          } else if (msg.type === 'seat_unlock' && msg.show_id === SHOW_ID) {
+            const el = document.querySelector(`.seat[data-seat-id="${msg.seat_id}"]`);
+            if (!el) return;
+            myLocked.delete(msg.seat_id);
+            selected.delete(msg.seat_id);
+            classify(el, 'available');
+            updateSummary();
+          } else if (msg.type === 'seat_booked' && msg.show_id === SHOW_ID) {
+            for (const id of (msg.seat_ids || [])) {
+              const el = document.querySelector(`.seat[data-seat-id="${id}"]`);
+              if (!el) continue;
+              classify(el, 'booked');
+              myLocked.delete(id);
+              selected.delete(id);
+            }
+            updateSummary();
+          } else if (msg.type === 'error') {
+            console.warn("WS error:", msg.message);
+          }
+        } catch (e) {
+          console.warn("Non-JSON WS message", evt.data);
+        }
+      };
+
+      ws.onclose = () => {
+        if (extendTimer) { clearInterval(extendTimer); extendTimer = null; }
+      };
+    }
+
+    async function proceed() {
+      const seats = Array.from(selected);
+      if (!seats.length) return;
+
+      const payload = {
+        user_id: Number(USER_ID),
+        show_id: Number(SHOW_ID),
+        booking_reference: "string",
+        booking_status: "PENDING",
+        payment_id: 0,
+        discount_id: 2,         // adjust as needed
+        booking_time: new Date().toISOString(),
+        amount: 0,
+        seats,
+        foods: []               // add UI for foods if needed
+      };
+      const res = await fetch(`${API_BASE}/bookings/`, {
+        method: "POST",
+        headers: { "Content-Type":"application/json", "accept":"application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert("Booking failed: " + (err.detail || res.statusText));
+        return;
+      }
+      const data = await res.json();
+      alert("Booking succeeded! ID " + data.booking_id);
+    }
+
+    document.getElementById('proceed').addEventListener('click', proceed);
+
+    // initialize event handlers and WS
+    bindSeatClicks();
+    updateSummary();
+    connectWS();
+  </script>
+</body>
+</html>

@@ -21,6 +21,10 @@ from model.seat import SeatLock
 from schemas import SeatLockStatus as SeatLockStatusEnum
 from sqlalchemy import and_
 from datetime import datetime, timezone
+from model.movie import Movie
+from model.theatre import Show
+from model.payments import Payment
+from model.theatre import Show
 def _utcnow():
     from datetime import datetime, timezone
     return datetime.now(timezone.utc)
@@ -70,8 +74,7 @@ except Exception:
 
 router = APIRouter(prefix="/bookings", tags=["Bookings"])
 
-# Payment service target: prefer environment variable for local vs docker setups.
-# For local runs default to localhost so Windows IPv4 connects well.
+
 BOOKING_PAYMENT_TARGET = os.getenv("PAYMENT_SERVICE_TARGET", "127.0.0.1:50051")
 
 
@@ -88,8 +91,91 @@ def get_bookings(
         filters["user_id"] = user_id
     if show_id is not None:
         filters["show_id"] = show_id
+    
     return booking_crud.get_all(db, skip=skip, limit=limit, filters=filters)
 
+@router.put("/cancel/{booking_id}")
+def delete_booking(booking_id: int, db: Session = Depends(get_db)):
+    # Treat PUT /cancel as "cancel booking"
+    booking = booking_crud.get(db, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    # Idempotency: if already cancelled, return current state
+    if str(booking.booking_status).upper() == "CANCELLED":
+        refund_amount = 0
+        if booking.payment_id:
+            payment = db.query(Payment).filter(Payment.payment_id == booking.payment_id).first()
+            if payment and payment.refund_amount is not None:
+                refund_amount = int(payment.refund_amount)
+        return {
+            "message": "Booking already cancelled",
+            "booking_id": booking.booking_id,
+            "refund_amount": refund_amount,
+        }
+
+    # Compute refund based on time difference to show start
+    refund_amount = 0
+    amount = int(booking.amount or 0)
+
+    show = db.query(Show).filter(Show.show_id == booking.show_id).first()
+    if show:
+        try:
+            show_dt = datetime.combine(show.show_date, show.show_time).replace(tzinfo=timezone.utc)
+            now = _utcnow()
+            hours_before = (show_dt - now).total_seconds() / 3600.0
+            if hours_before >= 8.0:
+                refund_amount = (amount * 80) // 100
+            else:
+                refund_amount = 0
+        except Exception:
+            refund_amount = 0
+
+    # Update payment if present
+    if booking.payment_id:
+        payment = db.query(Payment).filter(Payment.payment_id == booking.payment_id).first()
+        if payment:
+            payment.payment_status = "REFUNDED"
+            payment.refund_amount = int(refund_amount)
+            db.add(payment)
+
+    # Mark booking as cancelled
+    booking.booking_status = "CANCELLED"
+    db.add(booking)
+
+    # Release seat locks so seats become available again, then delete booked seats/foods
+    try:
+        # Release locks (best-effort)
+        booked_seats = db.query(BookedSeat).filter(BookedSeat.booking_id == booking.booking_id).all()
+        for bs in booked_seats:
+            lock = db.query(SeatLock).filter(
+                SeatLock.show_id == int(booking.show_id),
+                SeatLock.seat_id == int(bs.seat_id),
+            ).first()
+            if lock:
+                # If your SeatLockStatusEnum is a string Enum, either EXPIRED or EXPIRED.value is fine
+                lock.status = SeatLockStatusEnum.EXPIRED.value if hasattr(SeatLockStatusEnum, "EXPIRED") else "EXPIRED"
+                if hasattr(lock, "expire_at"):
+                    lock.expire_at = _utcnow()
+                db.add(lock)
+
+       
+        db.query(BookedSeat).filter(BookedSeat.booking_id == booking.booking_id).delete(synchronize_session=False)
+        db.query(BookedFood).filter(BookedFood.booking_id == booking.booking_id).delete(synchronize_session=False)
+
+
+    except Exception:
+    
+        pass
+
+    db.commit()
+    db.refresh(booking)
+
+    return {
+        "message": "Booking cancelled successfully",
+        "booking_id": booking.booking_id,
+        "refund_amount": int(refund_amount),
+    }
 
 @router.get("/{booking_id}", response_model=BookingResponse)
 def get_booking(booking_id: int, db: Session = Depends(get_db)):
@@ -114,7 +200,7 @@ async def create_booking(obj: BookingCreate, db: Session = Depends(get_db)):
         )
 
         db.add(booking)
-        db.flush()  # populate booking.booking_id
+        db.flush()  
         db.refresh(booking)
 
         total_amount = 0.0
@@ -128,20 +214,13 @@ async def create_booking(obj: BookingCreate, db: Session = Depends(get_db)):
             .scalar_one_or_none()
             or 0
         )
-        locked_seats= db.execute(
-            text("SELECT seat_id FROM seat_locks where show_id = :show_id AND status = 'LOCKED'"),
-            {"show_id": obj.show_id}
-        ).scalars().all()
+        
 
 
 
         # Seats calculation: use scalar_one_or_none and produce clear error if pricing missing
         for seat in obj.seats:
-            if seat in locked_seats:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Seat id {seat} is locked and cannot be booked.",
-                )
+            
             price = db.execute(
                 text(
                     """
@@ -335,7 +414,6 @@ async def create_booking(obj: BookingCreate, db: Session = Depends(get_db)):
         raise
     except Exception as e:
         db.rollback()
-        # Provide the original exception message to aid debugging
         raise HTTPException(500, f"Failed to create booking: {str(e)}")
 
 

@@ -50,6 +50,3 @@ class Payment(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
-# ---------------------------------------------------------------------------
-# 10. GST
-# ---------------------------------------------------------------------------

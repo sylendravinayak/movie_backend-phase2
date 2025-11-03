@@ -66,7 +66,7 @@ def auto_schedule(
     if not movies or not screens:
         raise HTTPException(status_code=400, detail="No movies or screens available")
 
-    # Convert data for OR-Tools
+    
     movie_list = [{"id": m.movie_id, "duration": m.duration} for m in movies]
     screen_list = [{"id": s.screen_id} for s in screens]
 
