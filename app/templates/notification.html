@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ title or "Notification" }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, "Noto Sans", sans-serif; color: #111827; }
+    .container { max-width: 640px; margin: 24px auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 12px; }
+    .title { font-weight: 700; font-size: 20px; margin: 0 0 8px; }
+    .msg { margin: 0 0 16px; color: #374151; }
+    .meta { background: #f9fafb; border: 1px solid #e5e7eb; padding: 12px; border-radius: 8px; font-size: 14px; color: #374151; }
+    .meta dt { font-weight: 600; }
+    .meta dd { margin: 0 0 8px 0; }
+    .footer { margin-top: 16px; font-size: 12px; color: #6b7280; }
+    a.button { display: inline-block; margin-top: 12px; background: #2563eb; color: #fff; padding: 10px 14px; border-radius: 8px; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1 class="title">{{ title }}</h1>
+    <p class="msg">Hi {{ user_name }},</p>
+    <p class="msg">{{ message }}</p>
+
+    {% if metadata %}
+    <dl class="meta">
+      {% for k, v in metadata.items() %}
+        <dt>{{ k }}</dt>
+        <dd>{{ v }}</dd>
+      {% endfor %}
+    </dl>
+    {% endif %}
+
+    {% if deeplink %}
+      <a class="button" href="{{ deeplink }}" target="_blank" rel="noopener">View details</a>
+    {% elif frontend_url %}
+      <a class="button" href="{{ frontend_url }}" target="_blank" rel="noopener">Open app</a>
+    {% endif %}
+
+    <p class="footer">This is an automated email for type: <strong>{{ type }}</strong>.</p>
+  </div>
+</body>
+</html>

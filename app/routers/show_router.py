@@ -2,12 +2,15 @@ from datetime import datetime, date, time, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
+
 from database import get_db
-from model import Show,Screen,Movie
+from model import Show, Screen, Movie, Booking, BookedSeat, BookedFood
+from model.theatre import ShowStatusEnum
 from utils.slotfinder import find_available_slots
 from schemas.theatre_schema import ShowCreate, ShowUpdate, ShowOut
 from crud.show_crud import show_crud
 from utils.autoschedule import generate_week_schedule
+
 router = APIRouter(prefix="/shows", tags=["Shows"])
 
 # -----------------------------
@@ -55,6 +58,40 @@ def get_all_shows(
 
     return show_crud.get_all(db=db, skip=skip, limit=limit, filters=filters)
 
+# -----------------------------
+# CANCEL A SHOW + CANCEL ALL ITS BOOKINGS
+# -----------------------------
+@router.put("/{show_id}/cancel", response_model=ShowOut)
+def cancel_show(show_id: int, db: Session = Depends(get_db)):
+    show = show_crud.get(db=db, id=show_id)
+    if not show:
+        raise HTTPException(status_code=404, detail="Show not found")
+
+    # If already cancelled, still ensure bookings and their items are cleaned up
+    already_cancelled = str(show.status) == ShowStatusEnum.CANCELLED.value
+
+    # 1) Mark show as CANCELLED (idempotent)
+    show.status = ShowStatusEnum.CANCELLED.value
+    db.add(show)
+
+    # 2) Cancel all bookings for this show (idempotent)
+    db.query(Booking).filter(Booking.show_id == show_id).update(
+        {Booking.booking_status: "CANCELLED"},
+        synchronize_session=False
+    )
+
+    # 3) Delete all booked seats and foods for those bookings
+    #    Use booking_ids list to avoid DB engine incompatibilities with subquery IN deletes.
+    booking_ids = [b.booking_id for b in db.query(Booking).with_entities(Booking.booking_id).filter(Booking.show_id == show_id).all()]
+    if booking_ids:
+        db.query(BookedSeat).filter(BookedSeat.booking_id.in_(booking_ids)).delete(synchronize_session=False)
+        db.query(BookedFood).filter(BookedFood.booking_id.in_(booking_ids)).delete(synchronize_session=False)
+
+    db.commit()
+    db.refresh(show)
+
+    return show
+
 @router.post("/auto-schedule")
 def auto_schedule(
     start_date: datetime = Query(..., description="Start date for scheduling (YYYY-MM-DD)"),
@@ -66,7 +103,6 @@ def auto_schedule(
     if not movies or not screens:
         raise HTTPException(status_code=400, detail="No movies or screens available")
 
-    
     movie_list = [{"id": m.movie_id, "duration": m.duration} for m in movies]
     screen_list = [{"id": s.screen_id} for s in screens]
 
@@ -80,7 +116,6 @@ def auto_schedule(
     )
 
     # Optionally save schedule into DB
-  
     for s in schedule:
         show = Show(
             movie_id=s["movie_id"],
@@ -101,19 +136,19 @@ def get_available_slots(
     date: datetime = Query(..., description="Date in YYYY-MM-DD format"),
     db: Session = Depends(get_db)
 ):
-    # 1️⃣ Validate screen
+    # 1) Validate screen
     screen = db.query(Screen).filter(Screen.screen_id == screen_id).first()
     if not screen:
         raise HTTPException(status_code=404, detail="Screen not found")
 
-    # 2️⃣ Get movie duration
+    # 2) Get movie duration
     movie = db.query(Movie).filter(Movie.movie_id == movie_id).first()
     if not movie:
         raise HTTPException(status_code=404, detail="Movie not found")
 
     movie_duration = movie.duration  # must be in your Movie model
 
-    # 3️⃣ Fetch existing shows for that screen/date
+    # 3) Fetch existing shows for that screen/date
     shows = (
         db.query(Show)
         .filter(Show.screen_id == screen_id, Show.show_date == date.date())
@@ -129,7 +164,7 @@ def get_available_slots(
             ]
         }
 
-    # 4️⃣ Convert to (start, end) tuples
+    # 4) Convert to (start, end) tuples
     existing_shows = []
     for s in shows:
         end_time = (
@@ -138,7 +173,7 @@ def get_available_slots(
         ).time()
         existing_shows.append((s.show_time, end_time))
 
-    # 5️⃣ Find available slots
+    # 5) Find available slots
     available = find_available_slots(
         existing_shows,
         movie_duration,
@@ -147,9 +182,10 @@ def get_available_slots(
         buffer=15
     )
 
-    # 6️⃣ Format output
+    # 6) Format output
     slots = [{"start": str(s), "end": str(e)} for s, e in available]
     return {"available_slots": slots}
+
 # -----------------------------
 # GET SHOW BY ID
 # -----------------------------
@@ -160,21 +196,19 @@ def get_show(show_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Show not found")
     return show
 
-
 # -----------------------------
 # UPDATE SHOW
 # -----------------------------
-@router.put("/{show_id}", response_model=ShowOut)
+#@router.put("/{show_id}", response_model=ShowOut)
 def update_show(show_id: int, show_in: ShowUpdate, db: Session = Depends(get_db)):
     db_obj = show_crud.get(db=db, id=show_id)
     if not db_obj:
         raise HTTPException(status_code=404, detail="Show not found")
     return show_crud.update(db=db, db_obj=db_obj, obj_in=show_in)
 
-
 # -----------------------------
 # DELETE SHOW
 # -----------------------------
-@router.delete("/{show_id}")
+#@router.delete("/{show_id}")
 def delete_show(show_id: int, db: Session = Depends(get_db)):
     return show_crud.remove(db=db, id=show_id)

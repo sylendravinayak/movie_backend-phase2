@@ -1,43 +1,67 @@
-from fastapi import APIRouter, Query
-from crud.backup_crud import backup_crud
-from schemas.backup_restore import BackupLogCreate, BackupLogUpdate
-from utils.backup_service import create_backup
+from __future__ import annotations
+
+from enum import Enum
+from typing import Optional, List
+
+from fastapi import APIRouter, Depends, Query, status
+from pydantic import BaseModel, Field
+
+from crud.backup_crud import BackupService  # correct import
+
+router = APIRouter(prefix="/backups", tags=["Backups"])
 
 
-router = APIRouter(prefix="/backup", tags=["Backups"])
+# Use Enum (more robust across Pydantic versions than Literal)
+class BackupType(str, Enum):
+    postgres = "postgres"
+    mongodb = "mongodb"
+    both = "both"
 
-@router.post("/")
-async def create_backup_log(data: BackupLogCreate):
-    return await backup_crud.create(data)
 
-@router.get("/{id}")
-async def get_backup(id: str):
-    return await backup_crud.get(id)
+class BackupRequest(BaseModel):
+    backupType: BackupType = Field(..., description="Which systems to backup")
+    tables: Optional[List[str]] = Field(default=None, description="Postgres tables to include (optional)")
+    notes: Optional[str] = Field(default=None, description="Free-form notes for this backup")
 
-@router.get("/")
-async def get_all(skip: int = 0, limit: int = 10):
-    return await backup_crud.get_all(skip=skip, limit=limit)
 
-@router.put("/{id}")
-async def update_backup(id: str, data: BackupLogUpdate):
-    return await backup_crud.update(id, data)
+def _get_mongo_db():
+    # Avoid type-annotating dependencies with third-party types to prevent FastAPI field coercion
+    from database import db as mongo_db
+    return mongo_db
 
-@router.delete("/{id}")
-async def delete_backup(id: str):
-    return await backup_crud.remove(id)
 
-# NEW: trigger an actual backup
-@router.post("/run")
-async def run_backup(
-    include_postgres: bool = Query(True, description="Include PostgreSQL backup"),
-    include_mongo: bool = Query(True, description="Include MongoDB backup"),
-    label: str | None = Query(None, description="Optional label for this backup folder name"),
+def _get_service(mdb=Depends(_get_mongo_db)):
+    return BackupService(mdb)
+
+
+@router.post("/", status_code=status.HTTP_201_CREATED, response_model=None)
+async def create_backup(
+    body: BackupRequest,
+    admin_id: int = Query(0, description="ID of the admin/user performing the backup"),
+    svc=Depends(_get_service),
 ):
-    """
-    Creates a timestamped folder under backups/ with:
-      - postgres.sql.gz (pg_dump output)
-      - mongo.archive.gz (mongodump output)
-      - manifest.json (metadata + checksums)
-    """
-    result = await create_backup(include_postgres=include_postgres, include_mongo=include_mongo, label=label)
-    return result
+    return await svc.create_backup(body, admin_id)
+
+
+@router.get("/", response_model=None)
+async def list_backups(
+    limit: int = Query(50, ge=1, le=500),
+    svc=Depends(_get_service),
+):
+    return await svc.list_backups(limit=limit)
+
+
+@router.get("/{backup_id}", response_model=None)
+async def get_backup(
+    backup_id: str,
+    svc=Depends(_get_service),
+):
+    return await svc.get_backup(backup_id)
+
+
+@router.delete("/{backup_id}", response_model=None)
+async def delete_backup(
+    backup_id: str,
+    svc=Depends(_get_service),
+):
+    return await svc.delete_backup(backup_id)

@@ -29,6 +29,7 @@ from routers.ws_router import router as ws_router
 Base.metadata.create_all(bind=engine)
 from fastapi.middleware.cors import CORSMiddleware
 from routers.seatmap_rouer import router as seatmap_router
+from routers.feedback import router as feedback_router
 app = FastAPI()
 
 seatlock_crud = SeatLockCRUD()
@@ -86,3 +87,4 @@ app.include_router(restore_router)
 app.include_router(notification_router)
 app.include_router(ws_router)
 app.include_router(seatmap_router)
+app.include_router(feedback_router)
