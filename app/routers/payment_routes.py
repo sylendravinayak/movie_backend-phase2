@@ -8,7 +8,7 @@ router = APIRouter(prefix="/payments", tags=["Payments"])
 
 
 
-@router.post("/", response_model=PaymentResponse)
+#@router.post("/", response_model=PaymentResponse)
 def create_payment(obj_in: PaymentCreate, db: Session = Depends(get_db)):
     return payment_crud.create(db, obj_in)
 
@@ -23,12 +23,12 @@ def get_payment(payment_id: int, db: Session = Depends(get_db)):
     return payment_crud.get(db, payment_id)
 
 
-@router.put("/{payment_id}", response_model=PaymentResponse)
+#@router.put("/{payment_id}", response_model=PaymentResponse)
 def update_payment(payment_id: int, obj_in: PaymentUpdate, db: Session = Depends(get_db)):
     db_obj = payment_crud.get(db, payment_id)
     return payment_crud.update(db, db_obj, obj_in)
 
 
-@router.delete("/{payment_id}")
+#@router.delete("/{payment_id}")
 def delete_payment(payment_id: int, db: Session = Depends(get_db)):
     return payment_crud.remove(db, payment_id)

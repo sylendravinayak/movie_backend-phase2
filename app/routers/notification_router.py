@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query,Depends
 from schemas.notification_schemas import NotificationCreate, NotificationUpdate
 from crud.notification_crud import notification_crud
 from model.notification import Notification
 from utils.redis_client import push_notification_event
+from schemas import UserRole
+from utils.auth.jwt_bearer import getcurrent_user, JWTBearer
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
-@router.post("/")
+#@router.post("/")
 async def create_notification(data: NotificationCreate):
     return await notification_crud.create(data)
 
@@ -20,7 +22,7 @@ async def get_notifications(
         filters["user_id"] = user_id
     return await notification_crud.get_all(skip=skip, limit=limit, filters=filters)
 
-@router.get("/notify")
+#@router.get("/notify")
 async def test_notification(user_id: str, msg: str):
     await push_notification_event({
         "user_id": user_id,
@@ -30,8 +32,8 @@ async def test_notification(user_id: str, msg: str):
     return {"status": "notification sent to stream"}
 
 
-@router.get("/{id}")
-async def get_notification(id: str):
+#@router.get("/{id}")
+async def get_notification(id: str, payload=Depends(JWTBearer())):
     return await notification_crud.get(id)
 
 
@@ -40,6 +42,6 @@ async def delete_notification(id: str):
     return await notification_crud.remove(id)
 
 @router.put("/mark-all-read/{user_id}")
-async def mark_all_read(user_id: str):
+async def mark_all_read(user_id: str,payload:dict=Depends(JWTBearer())):
     await Notification.find({"user_id": user_id}).update({"$set": {"is_read": True}})
     return {"detail": "All notifications marked read"}

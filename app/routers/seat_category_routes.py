@@ -8,12 +8,13 @@ from schemas.theatre_schema import (
     SeatCategoryOut,
 )
 from typing import Optional
-
+from schemas import UserRole
+from utils.auth.jwt_bearer import getcurrent_user, JWTBearer
 router = APIRouter(prefix="/seat-categories", tags=["Seat Categories"])
 
 
 @router.post("/", response_model=SeatCategoryOut)
-def create_category(category: SeatCategoryCreate, db: Session = Depends(get_db)):
+def create_category(category: SeatCategoryCreate, db: Session = Depends(get_db), current_user: dict = Depends(getcurrent_user(UserRole.ADMIN.value))):
     return seat_category_crud.create(db, category)
 
 
@@ -24,13 +25,14 @@ def get_all_categories(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
     db: Session = Depends(get_db),
+    current_user:dict=Depends(getcurrent_user(UserRole.ADMIN.value))
 ):
     filters = {"screen_id": screen_id, "category_name": category_name}
     return seat_category_crud.get_all(db, skip=skip, limit=limit, filters=filters)
 
 
 @router.get("/{category_id}", response_model=SeatCategoryOut)
-def get_category(category_id: int, db: Session = Depends(get_db)):
+def get_category(category_id: int, db: Session = Depends(get_db),current_user:dict=Depends(getcurrent_user(UserRole.ADMIN.value))):
     category = seat_category_crud.get(db, category_id)
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -39,7 +41,7 @@ def get_category(category_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{category_id}", response_model=SeatCategoryOut)
 def update_category(
-    category_id: int, category_update: SeatCategoryUpdate, db: Session = Depends(get_db)
+    category_id: int, category_update: SeatCategoryUpdate, db: Session = Depends(get_db), current_user: dict = Depends(getcurrent_user(UserRole.ADMIN.value))
 ):
     category = seat_category_crud.get(db, category_id)
     if not category:
@@ -48,5 +50,5 @@ def update_category(
 
 
 @router.delete("/{category_id}")
-def delete_category(category_id: int, db: Session = Depends(get_db)):
+def delete_category(category_id: int, db: Session = Depends(get_db), current_user: dict = Depends(getcurrent_user(UserRole.ADMIN.value))):
     return seat_category_crud.remove(db, category_id)

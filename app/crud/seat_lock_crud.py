@@ -52,7 +52,6 @@ class SeatLockCRUD:
 
     def release_expired_locks(self, db: Session):
         now = datetime.utcnow()
-        # Delete rows instead of setting a non-existent EXPIRED enum
         expired_locks = db.query(SeatLock).filter(
             SeatLock.expires_at < now,
             SeatLock.status == SeatLockStatusEnum.LOCKED

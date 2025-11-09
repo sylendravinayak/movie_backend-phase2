@@ -19,6 +19,7 @@ class MovieBase(ORMModel):
     rating: Optional[float] = Field(
         None, description="e.g., 4.5 out of 5.0"
     )
+    background_image_url: Optional[str] = Field(None, max_length=255)
     certificate: Optional[str] = Field(None, max_length=10)
     poster_url: Optional[str] = Field(None, max_length=255)
     is_active: bool = True
@@ -38,6 +39,7 @@ class MovieUpdate(ORMModel):
     language: Optional[list[str]] = Field(None, max_length=50)
     genres: Optional[list[str]] = Field(None, max_length=50)
     release_date: Optional[date] = None
+    background_image_url: Optional[str] = Field(None, max_length=255)
     certificate: Optional[str] = Field(None, max_length=10)
     poster_url: Optional[str] = Field(None, max_length=255)
     is_active: Optional[bool] = None

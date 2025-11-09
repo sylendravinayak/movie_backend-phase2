@@ -73,3 +73,7 @@ class BackupStatus(str, Enum):
 class RestoreStatus(str, Enum):
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
+
+class UserRole(str, Enum):
+    ADMIN = "admin"
+    USER = "user"

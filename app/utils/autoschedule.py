@@ -10,23 +10,7 @@ def generate_week_schedule(
     theatre_end: time,
     buffer: int = 15,
 ) -> List[Dict[str, Any]]:
-    """
-    Greedy, buffer-aware scheduler that fills each day's operating window for each screen.
-    - movies: [{ "id": int, "duration": int_in_minutes }]
-    - screens: [{ "id": int }]
-    - start_date: datetime.date
-    - theatre_start/theatre_end: datetime.time (operating window)
-    - buffer: minutes gap between consecutive shows on the same screen
-
-    Returns list of:
-      {
-        "date": "YYYY-MM-DD",
-        "screen_id": int,
-        "movie_id": int,
-        "start": "HH:MM",
-        "end": "HH:MM"
-      }
-    """
+   
     if not movies or not screens:
         return []
 

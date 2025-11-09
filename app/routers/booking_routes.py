@@ -29,7 +29,9 @@ from utils.redis_client import push_notification_event
 import asyncio
 from utils.email_servicer import EmailService
 from model.user import User
-
+from schemas import UserRole
+from utils.auth.jwt_bearer import getcurrent_user,JWTBearer
+from sqlalchemy.orm import joinedload
 
 def _log_booking_status(db: Session, booking_id: int, from_status: Optional[str], to_status: str, changed_by: StatusChangedByEnum, reason: Optional[str] = None):
     # Helper: add a status log to the current transaction; caller should commit
@@ -94,6 +96,7 @@ def get_bookings(
     limit: int = 10,
     user_id: Optional[int] = Query(None),
     show_id: Optional[int] = Query(None),
+    current_user: dict = Depends(getcurrent_user(UserRole.ADMIN.value))
 ):
     filters = {}
     if user_id is not None:
@@ -103,7 +106,7 @@ def get_bookings(
     return booking_crud.get_all(db, skip=skip, limit=limit, filters=filters)
 
 @router.get("/{booking_id}/logs")
-def get_booking_logs(booking_id: int, db: Session = Depends(get_db)):
+def get_booking_logs(booking_id: int, db: Session = Depends(get_db), current_user: dict = Depends(getcurrent_user(UserRole.ADMIN.value))):
     booking = booking_crud.get(db, booking_id)
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
@@ -122,7 +125,7 @@ def get_booking_logs(booking_id: int, db: Session = Depends(get_db)):
     ]
 
 @router.put("/cancel/{booking_id}")
-async def delete_booking(booking_id: int, db: Session = Depends(get_db)):
+async def delete_booking(booking_id: int, db: Session = Depends(get_db), payload: dict = Depends(JWTBearer())):
     booking = booking_crud.get(db, booking_id)
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
@@ -225,14 +228,19 @@ async def delete_booking(booking_id: int, db: Session = Depends(get_db)):
     }
 
 @router.get("/{booking_id}", response_model=BookingResponse)
-def get_booking(booking_id: int, db: Session = Depends(get_db)):
-    booking = booking_crud.get(db, booking_id)
+def get_booking(booking_id: int, db: Session = Depends(get_db), payload: dict = Depends(JWTBearer())):
+    booking = (
+        db.query(Booking)
+        .options(joinedload(Booking.seats), joinedload(Booking.foods))
+        .filter(Booking.booking_id == booking_id)
+        .first()
+    )
     if not booking:
         raise HTTPException(404, "Booking not found")
     return booking
 
 @router.post("/", response_model=BookingResponse, status_code=status.HTTP_201_CREATED)
-async def create_booking(obj: BookingCreate, db: Session = Depends(get_db)):
+async def create_booking(obj: BookingCreate, db: Session = Depends(get_db),payload: dict = Depends(JWTBearer())):
     try:
         # Create as PENDING
         booking = Booking(

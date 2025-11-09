@@ -10,28 +10,58 @@ from utils.slotfinder import find_available_slots
 from schemas.theatre_schema import ShowCreate, ShowUpdate, ShowOut
 from crud.show_crud import show_crud
 from utils.autoschedule import generate_week_schedule
-
+from schemas import UserRole
 router = APIRouter(prefix="/shows", tags=["Shows"])
-
+from utils.auth.jwt_bearer import getcurrent_user, JWTBearer
 # -----------------------------
 # CREATE SHOW
 # -----------------------------
+from datetime import datetime, timedelta
+from fastapi import HTTPException, status, Depends
+from sqlalchemy.orm import Session
+
 @router.post("/", response_model=ShowOut, status_code=status.HTTP_201_CREATED)
 def create_show(show_in: ShowCreate, db: Session = Depends(get_db)):
-    # check duplicate (screen_id + date + time)
-    existing = db.query(Show).filter(
-        Show.screen_id == show_in.screen_id,
-        Show.show_date == show_in.show_date,
-        Show.show_time == show_in.show_time
-    ).first()
-    if existing:
+    # 1) Fetch movie duration
+    movie = db.query(Movie).filter(Movie.movie_id == show_in.movie_id).first()
+    if not movie:
+        raise HTTPException(status_code=404, detail="Movie not found")
+
+    # 2) Compute end_time from start + duration
+    start_dt = datetime.combine(show_in.show_date, show_in.show_time)
+    end_dt = start_dt + timedelta(minutes=int(movie.duration))
+    computed_end_time = end_dt.time()
+
+    # 3) Overlap check: same screen and date, (existing.start < new.end) AND (existing.end > new.start)
+    overlap = (
+        db.query(Show)
+        .filter(
+            Show.screen_id == show_in.screen_id,
+            Show.show_date == show_in.show_date,
+            Show.show_time < computed_end_time,
+            Show.end_time > show_in.show_time,
+        )
+        .first()
+    )
+    if overlap:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A show already exists for this screen, date, and time"
+            detail="Overlapping show exists for this screen and date",
         )
 
-    return show_crud.create(db=db, obj_in=show_in)
-
+    # 4) Create the show without mutating show_in
+    show = Show(
+        movie_id=show_in.movie_id,
+        screen_id=show_in.screen_id,
+        show_date=show_in.show_date,
+        show_time=show_in.show_time,
+        end_time=computed_end_time,
+        status=show_in.status,
+    )
+    db.add(show)
+    db.commit()
+    db.refresh(show)
+    return show
 
 # -----------------------------
 # GET ALL SHOWS (with filters)
@@ -44,7 +74,8 @@ def get_all_shows(
     movie_id: Optional[int] = None,
     screen_id: Optional[int] = None,
     status: Optional[str] = None,
-    show_date: Optional[str] = Query(None, description="Filter by show date (YYYY-MM-DD)")
+    show_date: Optional[str] = Query(None, description="Filter by show date (YYYY-MM-DD)"),
+    payload: dict = Depends(JWTBearer())
 ):
     filters = {}
     if movie_id:
@@ -62,7 +93,7 @@ def get_all_shows(
 # CANCEL A SHOW + CANCEL ALL ITS BOOKINGS
 # -----------------------------
 @router.put("/{show_id}/cancel", response_model=ShowOut)
-def cancel_show(show_id: int, db: Session = Depends(get_db)):
+def cancel_show(show_id: int, db: Session = Depends(get_db), current_user: dict = Depends(getcurrent_user(UserRole.ADMIN.value))):
     show = show_crud.get(db=db, id=show_id)
     if not show:
         raise HTTPException(status_code=404, detail="Show not found")
@@ -95,7 +126,8 @@ def cancel_show(show_id: int, db: Session = Depends(get_db)):
 @router.post("/auto-schedule")
 def auto_schedule(
     start_date: datetime = Query(..., description="Start date for scheduling (YYYY-MM-DD)"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(getcurrent_user(UserRole.ADMIN.value))
 ):
     movies = db.query(Movie).filter(Movie.is_active == True).all()
     screens = db.query(Screen).all()
@@ -112,7 +144,7 @@ def auto_schedule(
         start_date.date(),
         time(9, 0),
         time(23, 59),
-        buffer=15
+        buffer=60
     )
 
     # Optionally save schedule into DB
@@ -134,7 +166,8 @@ def get_available_slots(
     screen_id: int,
     movie_id: int,
     date: datetime = Query(..., description="Date in YYYY-MM-DD format"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(getcurrent_user(UserRole.ADMIN.value))
 ):
     # 1) Validate screen
     screen = db.query(Screen).filter(Screen.screen_id == screen_id).first()
@@ -179,7 +212,7 @@ def get_available_slots(
         movie_duration,
         time(9, 0),    # theatre start
         time(23, 59),  # theatre close
-        buffer=15
+        buffer=60
     )
 
     # 6) Format output
@@ -189,8 +222,8 @@ def get_available_slots(
 # -----------------------------
 # GET SHOW BY ID
 # -----------------------------
-@router.get("/{show_id}", response_model=ShowOut)
-def get_show(show_id: int, db: Session = Depends(get_db)):
+@router.get("/{show_id}", response_model=ShowOut,)
+def get_show(show_id: int, db: Session = Depends(get_db), current_user: dict = Depends(JWTBearer())):
     show = show_crud.get(db=db, id=show_id)
     if not show:
         raise HTTPException(status_code=404, detail="Show not found")

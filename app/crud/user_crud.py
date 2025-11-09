@@ -4,6 +4,7 @@ from schemas.user_schema import UserCreate, UserUpdate
 from sqlalchemy.orm import Session
 from utils.auth.jwt_handler import verify_password, hash_password,create_access_token,create_refresh_token
 from typing import Optional
+from fastapi import Response
 class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
     def create(self, db: Session, obj_in: UserCreate) -> User:
         existing_user = db.query(User).filter((User.email == obj_in.email) | (User.phone == obj_in.phone)).first()
@@ -21,7 +22,7 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
         db.refresh(new_user)
         return new_user
     
-    def login(self,db: Session,email:str,password:str)->User:
+    def login(self,response:Response,db: Session,email:str,password:str)->User:
         user = db.query(User).filter(User.email == email).first()
         if user and verify_password(password, user.password):
             token_data = {
@@ -31,9 +32,9 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
             }
             access_token = create_access_token(token_data)
             refresh_token = create_refresh_token(token_data)
+            response.set_cookie(key="refresh_token", value=refresh_token, httponly=True)
             return {
                 "access_token": access_token,
-                "refresh_token": refresh_token,
                 "token_type": "bearer"
             }
     

@@ -79,7 +79,7 @@ class Show(Base):
         Index("ix_shows_movie_id", "movie_id"),
         Index("ix_shows_screen_id", "screen_id"),
         Index("ix_shows_show_date", "show_date"), 
-        UniqueConstraint("screen_id", "show_date", "show_time", name="uq_screen_date_time")
+        UniqueConstraint("screen_id", "show_date", "show_time","status", name="uq_screen_date_time")
     )
 
 #show_category_price

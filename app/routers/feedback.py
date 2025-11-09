@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from typing import List, Optional
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-
 from database import get_db
 from crud import feedback as feedback_crud
 from schemas.feedback import (
@@ -13,7 +11,8 @@ from schemas.feedback import (
     FeedbackReply,
     FeedbackOut,
 )
-
+from utils.auth.jwt_bearer import JWTBearer,getcurrent_user
+from schemas import UserRole
 # Adjust this import if your EmailService file/module name differs
 from utils.email_servicer import EmailService
 
@@ -27,7 +26,7 @@ router = APIRouter(prefix="/feedbacks", tags=["Feedback"])
 
 
 @router.post("", response_model=FeedbackOut, status_code=status.HTTP_201_CREATED)
-def create_feedback(payload: FeedbackCreate, db: Session = Depends(get_db)) -> FeedbackOut:
+def create_feedback(payload: FeedbackCreate, db: Session = Depends(get_db), current_user: dict = Depends(getcurrent_user(UserRole.ADMIN.value))) -> FeedbackOut:
     fb = feedback_crud.create_feedback(
         db,
         booking_id=payload.booking_id,
@@ -39,41 +38,21 @@ def create_feedback(payload: FeedbackCreate, db: Session = Depends(get_db)) -> F
 
 
 @router.get("", response_model=List[FeedbackOut])
-def list_feedbacks(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)) -> List[FeedbackOut]:
+def list_feedbacks(skip: int = 0, limit: int = 50, db: Session = Depends(get_db), current_user: dict = Depends(getcurrent_user(UserRole.ADMIN.value))) -> List[FeedbackOut]:
     return feedback_crud.list_feedbacks(db, skip=skip, limit=limit)
 
 
 @router.get("/{feedback_id}", response_model=FeedbackOut)
-def get_feedback(feedback_id: int, db: Session = Depends(get_db)) -> FeedbackOut:
+def get_feedback(feedback_id: int, db: Session = Depends(get_db), payload: dict = Depends(JWTBearer())) -> FeedbackOut:
     fb = feedback_crud.get_feedback(db, feedback_id)
     if not fb:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback not found")
     return fb
 
 
-@router.patch("/{feedback_id}", response_model=FeedbackOut)
-def update_feedback(feedback_id: int, payload: FeedbackUpdate, db: Session = Depends(get_db)) -> FeedbackOut:
-    fb = feedback_crud.update_feedback(
-        db,
-        feedback_id=feedback_id,
-        rating=payload.rating,
-        comment=payload.comment,
-    )
-    if not fb:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback not found")
-    return fb
-
-
-@router.delete("/{feedback_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_feedback(feedback_id: int, db: Session = Depends(get_db)) -> None:
-    ok = feedback_crud.delete_feedback(db, feedback_id=feedback_id)
-    if not ok:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback not found")
-    return None
-
 
 @router.post("/{feedback_id}/reply", response_model=FeedbackOut)
-async def reply_to_feedback(feedback_id: int, payload: FeedbackReply, db: Session = Depends(get_db)) -> FeedbackOut:
+async def reply_to_feedback(feedback_id: int, payload: FeedbackReply, db: Session = Depends(get_db), current_user: dict = Depends(getcurrent_user(UserRole.ADMIN.value))) -> FeedbackOut:
     # 1) Persist the admin reply
     fb = feedback_crud.set_reply(db, feedback_id=feedback_id, reply=payload.reply)
     if not fb:

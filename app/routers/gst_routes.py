@@ -3,8 +3,9 @@ from sqlalchemy.orm import Session
 from database import get_db
 from crud.gst_crud import gst_crud
 from schemas.booking_schema import GSTCreate, GSTOut, GSTUpdate
-
-router = APIRouter(prefix="/gst", tags=["GST"])
+from schemas import UserRole
+from utils.auth.jwt_bearer import JWTBearer,getcurrent_user
+router = APIRouter(prefix="/gst", tags=["GST"],dependencies=[Depends(getcurrent_user(UserRole.ADMIN.value))])
 
 @router.post("/", response_model=GSTOut)
 def create_gst(data: GSTCreate, db: Session = Depends(get_db)):

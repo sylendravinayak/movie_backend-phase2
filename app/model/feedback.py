@@ -22,8 +22,6 @@ class Feedback(Base):
     rating = Column(Integer, nullable=False)
     comment = Column(Text, nullable=True)
     feedback_date = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    # Default to empty string so it's NOT NULL if you want to enforce NOT NULL at DB-level.
-    # Set nullable=True if you prefer reply to be optional until admin responds.
     reply = Column(String(1000), nullable=True, default=None)
 
     __table_args__ = (

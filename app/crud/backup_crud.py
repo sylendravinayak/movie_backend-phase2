@@ -39,7 +39,7 @@ class BackupService:
         # GITHUB_BACKUP_TOKEN: a classic PAT or fine-grained PAT with contents:write
         # GITHUB_BACKUP_OWNER: org or username
         # GITHUB_BACKUP_REPO: repo name
-        self.github_token = "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"
+        self.github_token = os.getenv("githubtoken", "")
         self.github_repo = "backup"
         self.github_owner = "sylendravinayak"
         self.github_branch = "main"

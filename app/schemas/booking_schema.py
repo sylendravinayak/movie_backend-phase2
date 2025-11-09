@@ -40,12 +40,10 @@ class StatusChangedBy(str, Enum):
 class BookingBase(ORMModel):
     user_id: int
     show_id: int
-    booking_reference: str = Field(..., max_length=20)
-    booking_status: BookingStatus = BookingStatus.PENDING
-    payment_id: Optional[int] = Field(None, description="FK to PAYMENT")
+    payment_id: Optional[int] = Field(None)
     discount_id: Optional[int] = Field(None, description="FK to DISCOUNTS")
-    booking_time: datetime
-    amount: int  # total amount for booking (currency as integer minor units or whole units)
+    booking_time: datetime =Field(default_factory=datetime.utcnow)
+    amount: int=0
     seats: Optional[list[int]] = Field(default_factory=list, description="List of seat IDs booked")
     foods: Optional[list[dict]] = Field(default_factory=list, description="List of food IDs ordered")
 

@@ -62,7 +62,6 @@ class ShowBase(ORMModel):
     screen_id: int
     show_date: date
     show_time: time
-    end_time: time
     status: ShowStatus = ShowStatus.UPCOMING
 
 
