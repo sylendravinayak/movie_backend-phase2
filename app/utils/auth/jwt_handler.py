@@ -3,19 +3,35 @@ from datetime import datetime, timedelta
 from fastapi import HTTPException
 from passlib.context import CryptContext
 from utils.config import Settings
+import uuid
+
 settings = Settings()
 
 def create_access_token(payload: dict) -> str:
     to_encode = payload.copy()
-    expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+    now = datetime.utcnow()
+    expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    jti = str(uuid.uuid4())
+    to_encode.update({
+        "exp": expire,
+        "iat": now,
+        "jti": jti,
+        "type": "access"
+    })
     token = jwt.encode(to_encode, settings.SECRET_KEY_ACCESS, algorithm=settings.ALGORITHM)
     return token
 
 def create_refresh_token(payload: dict) -> str:
     to_encode = payload.copy()
-    expire = datetime.utcnow() + timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+    now = datetime.utcnow()
+    expire = now + timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES)
+    jti = str(uuid.uuid4())
+    to_encode.update({
+        "exp": expire,
+        "iat": now,
+        "jti": jti,
+        "type": "refresh"
+    })
     token = jwt.encode(to_encode, settings.SECRET_KEY_REFRESH, algorithm=settings.ALGORITHM)
     return token
 

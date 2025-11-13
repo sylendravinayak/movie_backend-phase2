@@ -34,7 +34,6 @@ class Screen(Base):
     __tablename__="screens"
     screen_id=Column(Integer, primary_key=True, index=True)
     screen_name=Column(String(100), nullable=False)
-    total_seats=Column(Integer, nullable=False)
     screen_type=Column(String(50), nullable=False)
     is_available=Column(Boolean, default=True)
   

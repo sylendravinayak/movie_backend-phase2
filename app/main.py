@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from model.backup_restore import BackupLog, RestoreLog
 from utils.middleware.authentication_middleware import AuthorizationMiddleware
-from routers.user_rouers import router as user_router
+from routers.user_routers import router as user_router
 from routers.movie_router import router as movie_router
 from routers.screen_router import router as screen_router
 from routers.seat_router import router as seat_router
@@ -36,7 +36,6 @@ import logging
 import traceback
 import uuid
 from datetime import datetime, timezone
-
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -45,13 +44,17 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 import os
 from motor.motor_asyncio import AsyncIOMotorClient
 from beanie import init_beanie
+from routers.ticket_router import router as ticket_router
+from utils.middleware.logger import setup_logging, LoggingMiddleware
+
 Base.metadata.create_all(bind=engine)
 logger = logging.getLogger("uvicorn.error")
-
+setup_logging()
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 app = FastAPI()
+
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME = os.getenv("DB_NAME", "mydatabase")
@@ -182,7 +185,7 @@ async def cleanup_task():
         count = seatlock_crud.release_expired_locks(db)
         db.close()
         print(f"[Cleanup] Released {count} expired seat locks")
-        await asyncio.sleep(6000000)  # every 10 minutes
+        await asyncio.sleep(600)  # every 10 minutes
 
 @app.on_event("startup")
 async def startup():
@@ -223,3 +226,4 @@ app.include_router(notification_router)
 app.include_router(ws_router)
 app.include_router(seatmap_router)
 app.include_router(feedback_router)
+app.include_router(ticket_router)

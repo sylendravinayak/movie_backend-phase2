@@ -15,7 +15,7 @@ class SeatBase(ORMModel):
     row_number: int
     col_number: int
     category_id: int
-    seat_number: str = Field(..., max_length=10, description="e.g., A1, B5")
+    seat_number: Optional[str] = Field(None, max_length=10, description="e.g., A1, B5")
     is_available: bool = True
 
 

@@ -12,7 +12,7 @@ class Seat(Base):
     row_number = Column(Integer, nullable=False)
     col_number = Column(Integer, nullable=False)
     category_id = Column(Integer, ForeignKey("seat_categories.category_id", ondelete="SET NULL"), nullable=True)
-    seat_number = Column(String(10), nullable=False)
+    seat_number = Column(String(10), nullable=True)  # e.g., A1, B5
     is_available = Column(Boolean, nullable=False, default=True)  # 1 for available, 0 for unavailable
     # Relations
     screen = relationship("Screen", back_populates="seats")

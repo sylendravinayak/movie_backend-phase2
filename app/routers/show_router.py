@@ -9,16 +9,16 @@ from model.theatre import ShowStatusEnum
 from utils.slotfinder import find_available_slots
 from schemas.theatre_schema import ShowCreate, ShowUpdate, ShowOut
 from crud.show_crud import show_crud
-from utils.autoschedule import generate_week_schedule
-from schemas import UserRole
-router = APIRouter(prefix="/shows", tags=["Shows"])
 from utils.auth.jwt_bearer import getcurrent_user, JWTBearer
-# -----------------------------
-# CREATE SHOW
-# -----------------------------
+from schemas import UserRole
+from utils.autoschedule import HybridScheduleRequest, HybridScheduleResponse, ScheduledShow, greedy_day_schedule_with_windows
+from typing import Dict, Any
 from datetime import datetime, timedelta
 from fastapi import HTTPException, status, Depends
 from sqlalchemy.orm import Session
+from utils.autoschedule import persist_schedule,WarningEntry,ScheduledShow,greedy_day_schedule_with_windows
+router = APIRouter(prefix="/shows", tags=["Shows"])
+
 
 @router.post("/", response_model=ShowOut, status_code=status.HTTP_201_CREATED)
 def create_show(show_in: ShowCreate, db: Session = Depends(get_db)):
@@ -123,43 +123,94 @@ def cancel_show(show_id: int, db: Session = Depends(get_db), current_user: dict 
 
     return show
 
-@router.post("/auto-schedule")
-def auto_schedule(
-    start_date: datetime = Query(..., description="Start date for scheduling (YYYY-MM-DD)"),
+
+@router.post("/auto-schedule/hybrid", response_model=HybridScheduleResponse)
+def hybrid_auto_schedule(
+    payload: HybridScheduleRequest,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(getcurrent_user(UserRole.ADMIN.value))
+    current_user: dict = Depends(getcurrent_user(UserRole.ADMIN.value)),
 ):
-    movies = db.query(Movie).filter(Movie.is_active == True).all()
-    screens = db.query(Screen).all()
+    active_movies: List[Movie] = db.query(Movie).filter(Movie.is_active == True).all()
+    if not active_movies:
+        raise HTTPException(status_code=400, detail="No active movies available")
 
-    if not movies or not screens:
-        raise HTTPException(status_code=400, detail="No movies or screens available")
+    screens: List[Screen] = db.query(Screen).all()
+    if not screens:
+        raise HTTPException(status_code=400, detail="No screens available")
 
-    movie_list = [{"id": m.movie_id, "duration": m.duration} for m in movies]
-    screen_list = [{"id": s.screen_id} for s in screens]
+    movies_lookup: Dict[int, Movie] = {m.movie_id: m for m in active_movies}
+    existing_screen_ids = {s.screen_id for s in screens}
 
-    schedule = generate_week_schedule(
-        movie_list,
-        screen_list,
-        start_date.date(),
-        time(9, 0),
-        time(23, 59),
-        buffer=60
+    for assignment in payload.per_screen_assignments:
+        if assignment.screen_id not in existing_screen_ids:
+            raise HTTPException(status_code=400, detail=f"Screen {assignment.screen_id} does not exist")
+
+    buffer = payload.buffer_minutes
+    start_day = payload.start_date
+    days = payload.days
+
+    all_schedule: List[Dict[str, Any]] = []
+    warnings: List[WarningEntry] = []
+
+    global_filler_pool = list(movies_lookup.keys())
+
+    for day_offset in range(days):
+        current_day = start_day + timedelta(days=day_offset)
+        for assignment in payload.per_screen_assignments:
+            screen_obj = next((s for s in screens if s.screen_id == assignment.screen_id), None)
+            if not screen_obj:
+                warnings.append(WarningEntry(
+                    code="MISSING_SCREEN",
+                    message="Screen missing during iteration.",
+                    context={"screen_id": assignment.screen_id, "day": str(current_day)}
+                ))
+                continue
+
+            # Fetch existing shows for this screen/day
+            existing_shows = db.query(Show).filter(
+                Show.screen_id == screen_obj.screen_id,
+                Show.show_date == current_day
+            ).order_by(Show.show_time.asc()).all()
+
+            daily_schedule = greedy_day_schedule_with_windows(
+                day=current_day,
+                screen=screen_obj,
+                quotas=assignment.movies,
+                movies_lookup=movies_lookup,
+                buffer=buffer,
+                filler_pool=global_filler_pool,
+                warnings=warnings,
+                open_default=payload.default_open_time,
+                close_default=payload.default_close_time,
+                existing_shows=existing_shows
+            )
+            all_schedule.extend(daily_schedule)
+
+    if not payload.dry_run:
+        try:
+            persist_schedule(db, all_schedule, warnings)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"Failed to persist schedule: {e}")
+
+    response_schedule = [
+        ScheduledShow(
+            date=entry["date"],
+            start=entry["start"],
+            end=entry["end"],
+            movie_id=entry["movie_id"],
+            screen_id=entry["screen_id"],
+        )
+        for entry in all_schedule
+    ]
+
+    return HybridScheduleResponse(
+        message="Hybrid (Option B) schedule generated successfully" + (" (dry run)" if payload.dry_run else ""),
+        schedule=response_schedule,
+        warnings=warnings,
     )
 
-    # Optionally save schedule into DB
-    for s in schedule:
-        show = Show(
-            movie_id=s["movie_id"],
-            screen_id=s["screen_id"],
-            show_date=datetime.strptime(s["date"], "%Y-%m-%d").date(),
-            show_time=datetime.strptime(s["start"], "%H:%M").time(),
-            end_time=datetime.strptime(s["end"], "%H:%M").time()
-        )
-        db.add(show)
-    db.commit()
-
-    return {"message": "Weekly schedule generated successfully", "schedule": schedule}
 
 @router.get("/available-slots")
 def get_available_slots(

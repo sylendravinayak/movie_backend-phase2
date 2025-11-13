@@ -1,5 +1,12 @@
-{% set ws_base = ('ws://' ~ request.url.hostname ~ (':' ~ request.url.port if request.url.port else '')) %}
-{% set api_base = (request.url.scheme ~ '://' ~ request.url.hostname ~ (':' ~ request.url.port if request.url.port else '')) %}
+{% set cat_map = {} %}
+{% for s in seats %}
+  {% set cid = s.category_id %}
+  {% if cat_map.get(cid) is none %}
+    {% set _ = cat_map.update({cid: []}) %}
+  {% endif %}
+  {% set _ = cat_map[cid].append(s) %}
+{% endfor %}
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -25,6 +32,7 @@
     .legend .mine { background:#0a162b; border:1px solid #1e3a8a }
     .legend .locked { background:#1d1606; border:1px solid #92400e }
     .legend .booked { background:#1f0c0c; border:1px solid #7f1d1d }
+    .legend .walkway { background:#0b0f14; border:1px dashed var(--border) }
 
     .screen { text-align:center; padding: 6px; color: var(--muted); font-weight: 600; border-bottom: 1px dashed var(--border); margin: 8px 0 12px; }
     .section { background: var(--panel); border:1px solid var(--border); border-radius: 12px; margin-bottom: 14px; overflow: hidden; }
@@ -36,6 +44,7 @@
     .row { display: grid; grid-template-columns: 36px 1fr; align-items: center; gap: 8px; }
     .row-label { width: 36px; color: var(--muted); text-align: right; padding-right: 6px; }
     .row-seats { display: grid; grid-auto-flow: column; grid-auto-columns: 44px; gap: 8px; }
+
     .seat {
       height: 44px; border-radius: 10px; border: 1px solid var(--border);
       display:flex; align-items:center; justify-content:center; font-weight:600; cursor:pointer; user-select:none;
@@ -46,6 +55,15 @@
     .seat.locked { background: #1d1606; color: var(--locked); cursor: not-allowed; filter: saturate(0.8); }
     .seat.mine { background: #0a162b; color: var(--mine); box-shadow: inset 0 0 0 1px #1e40af; }
     .seat.booked { background: #1f0c0c; color: var(--booked); cursor: not-allowed; filter: grayscale(0.2) contrast(1.05); }
+
+    .walkway {
+      width: 44px; height: 44px; border-radius: 10px;
+      border: 1px dashed var(--border);
+      background: #0b0f14;
+      opacity: 0;
+      pointer-events: none;
+      
+    }
 
     .bottom-bar {
       position: fixed; left: 0; right: 0; bottom: 0; background: #0b0f14; border-top: 1px solid var(--border);
@@ -69,56 +87,70 @@
         <span><span class="dot mine"></span>Selected</span>
         <span><span class="dot locked"></span>Locked (other)</span>
         <span><span class="dot booked"></span>Booked</span>
+        <span><span class="dot walkway"></span>Walkway</span>
       </div>
     </div>
 
     <div class="screen">SCREEN</div>
 
-    {# Group seats by category for sections #}
-    {% set seats_by_cat = {} %}
-    {% for s in seats %}
-      {% set _ = seats_by_cat.setdefault(s.category_id or -1, []).append(s) %}
-    {% endfor %}
-
     {% for cat in categories %}
-      {% set cat_seats = seats_by_cat.get(cat.category_id, []) %}
+      {% set cat_seats = cat_map.get(cat.category_id, []) %}
       <div class="section" data-category-id="{{ cat.category_id }}" data-category-name="{{ cat.category_name }}" data-category-price="{{ cat.price }}">
         <div class="section-header">
           <div class="section-title">{{ cat.category_name }}</div>
           <div class="price">Rs {{ '%.0f'|format(cat.price) }}</div>
         </div>
-        <div class="seat-rows">
+
+        {% if cat_seats %}
           {% set rows = {} %}
           {% for s in cat_seats %}
-            {% set _ = rows.setdefault(s.row_number, []).append(s) %}
+            {% set rn = s.row_number %}
+            {% if rows.get(rn) is none %}
+              {% set _ = rows.update({rn: []}) %}
+            {% endif %}
+            {% set _ = rows[rn].append(s) %}
           {% endfor %}
-          {% for row_no, row_seats in rows|dictsort %}
-            {% set row_label = ('ABCDEFGHIJKLMNOPQRSTUVWXYZ'[row_no - 1] if 1 <= row_no <= 26 else 'R' ~ row_no) %}
-            <div class="row" data-row="{{ row_no }}">
-              <div class="row-label">{{ row_label }}</div>
-              <div class="row-seats">
-                {% for seat in row_seats|sort(attribute='col_number') %}
-                  {% set state = 'available' %}
-                  {% if seat.seat_id in booked_ids %}
-                    {% set state = 'booked' %}
-                  {% else %}
-                    {% for l in locks %}
-                      {% if l.seat_id == seat.seat_id %}
-                        {% set state = ('mine' if l.user_id == user_id else 'locked') %}
+
+          <div class="seat-rows">
+            {% for rn, row_seats in rows|dictsort %}
+              {% set rn_int = rn|int %}
+              {% set row_label = ('ABCDEFGHIJKLMNOPQRSTUVWXYZ'[rn_int - 1] if 1 <= rn_int <= 26 else 'R' ~ rn_int) %}
+              <div class="row" data-row="{{ rn }}">
+                <div class="row-label">{{ row_label }}</div>
+                <div class="row-seats">
+                  {# Render seats or walkway tiles #}
+                  {% for seat in row_seats|sort(attribute='col_number') %}
+                    {# A tile is a walkway iff seat_number is missing OR is_available is explicitly false #}
+                    {% set walkway = (seat.seat_number is none) or (seat.seat_number == '') or (seat.is_available is sameas false) %}
+
+                    {% if not walkway %}
+                      {% set state = 'available' %}
+                      {% if seat.seat_id in booked_ids %}
+                        {% set state = 'booked' %}
+                      {% else %}
+                        {% for l in locks %}
+                          {% if l.seat_id == seat.seat_id %}
+                            {% set state = ('mine' if l.user_id == user_id else 'locked') %}
+                          {% endif %}
+                        {% endfor %}
                       {% endif %}
-                    {% endfor %}
-                  {% endif %}
-                  <div class="seat {{ state }}"
-                       data-seat-id="{{ seat.seat_id }}"
-                       data-seat-number="{{ seat.seat_number }}"
-                       data-category-id="{{ seat.category_id }}"
-                       data-price="{{ seat.price }}"
-                  >{{ seat.seat_number }}</div>
-                {% endfor %}
+                      <div class="seat {{ state }}"
+                           data-seat-id="{{ seat.seat_id }}"
+                           data-seat-number="{{ seat.seat_number }}"
+                           data-category-id="{{ seat.category_id }}"
+                           data-price="{{ seat.price or cat.price }}"
+                      >{{ seat.seat_number }}</div>
+                    {% else %}
+                      <div class="walkway" aria-hidden="true" title="Walkway"></div>
+                    {% endif %}
+                  {% endfor %}
+                </div>
               </div>
-            </div>
-          {% endfor %}
-        </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div style="padding:12px;color:#9ca3af;font-size:13px;">No seats for this category.</div>
+        {% endif %}
       </div>
     {% endfor %}
   </div>
@@ -136,8 +168,9 @@
   <script>
     const SHOW_ID = {{ show_id }};
     const USER_ID = {{ user_id }};
-    const API_BASE = "{{ api_base }}";
-    const WS_BASE = "{{ ws_base }}";
+    // Build API/WS bases from current request (works behind proxies if scheme is set correctly)
+    const API_BASE = "{{ request.url.scheme }}://{{ request.url.hostname }}{% if request.url.port %}:{{ request.url.port }}{% endif %}";
+    const WS_BASE = "{{ 'wss' if request.url.scheme == 'https' else 'ws' }}://{{ request.url.hostname }}{% if request.url.port %}:{{ request.url.port }}{% endif %}";
 
     const selectedInfo = document.getElementById('selectedInfo');
     const totalEl = document.getElementById('total');
@@ -159,9 +192,9 @@
       const sum = ids.reduce((acc, id) => {
         const el = document.querySelector(`.seat[data-seat-id="${id}"]`);
         const price = el ? Number(el.dataset.price || 0) : 0;
-        return acc + price;
+        return acc + (isNaN(price) ? 0 : price);
       }, 0);
-      selectedInfo.innerHTML = (count > 0)
+      selectedInfo.innerHTML = count
         ? `<span class="meta">${count} seat${count>1?'s':''} selected</span> ${chips}`
         : `<span class="meta">0 seats selected</span>`;
       totalEl.textContent = `Total: Rs ${sum.toFixed(0)}`;
@@ -177,9 +210,10 @@
       document.querySelectorAll('.seat').forEach(el => {
         el.addEventListener('click', () => {
           const seatId = Number(el.dataset.seatId);
-          const state = el.classList.contains('booked') ? 'booked'
-                       : el.classList.contains('locked') ? 'locked'
-                       : el.classList.contains('mine') ? 'mine' : 'available';
+          const state =
+            el.classList.contains('booked') ? 'booked' :
+            el.classList.contains('locked') ? 'locked' :
+            el.classList.contains('mine') ? 'mine' : 'available';
           if (!ws || ws.readyState !== WebSocket.OPEN) { alert("WebSocket not connected"); return; }
           if (state === 'available') {
             ws.send(JSON.stringify({ action: 'lock', seat_id: seatId, ttl: 30 }));
@@ -191,11 +225,9 @@
     }
 
     function connectWS() {
-      if (ws) { try { ws.close(); } catch {} }
+      if (ws) { try { ws.close(); } catch(e){} }
       ws = new WebSocket(`${WS_BASE}/ws/seats/${SHOW_ID}?user_id=${encodeURIComponent(USER_ID)}`);
-
       ws.onopen = () => {
-        // extend locks periodically
         if (extendTimer) clearInterval(extendTimer);
         extendTimer = setInterval(() => {
           if (ws.readyState !== WebSocket.OPEN) return;
@@ -204,67 +236,60 @@
           }
         }, 15000);
       };
-
-      ws.onmessage = (evt) => {
+      ws.onmessage = evt => {
         try {
           const msg = JSON.parse(evt.data);
-          if (msg.type === 'seat_lock' && msg.show_id === SHOW_ID) {
+          if (msg.type === 'seat_lock' && Number(msg.show_id) === Number(SHOW_ID)) {
             const el = document.querySelector(`.seat[data-seat-id="${msg.seat_id}"]`);
             if (!el) return;
             if (String(msg.locked_by) === String(USER_ID)) {
               myLocked.add(msg.seat_id);
               selected.add(msg.seat_id);
-              classify(el, 'mine');
-            } else {
-              if (!myLocked.has(msg.seat_id)) {
-                classify(el, 'locked');
-              }
+              classify(el,'mine');
+            } else if (!myLocked.has(msg.seat_id)) {
+              classify(el,'locked');
             }
             updateSummary();
-          } else if (msg.type === 'seat_unlock' && msg.show_id === SHOW_ID) {
+          } else if (msg.type === 'seat_unlock' && Number(msg.show_id) === Number(SHOW_ID)) {
             const el = document.querySelector(`.seat[data-seat-id="${msg.seat_id}"]`);
             if (!el) return;
             myLocked.delete(msg.seat_id);
             selected.delete(msg.seat_id);
-            classify(el, 'available');
+            classify(el,'available');
             updateSummary();
-          } else if (msg.type === 'seat_booked' && msg.show_id === SHOW_ID) {
-            for (const id of (msg.seat_ids || [])) {
+          } else if (msg.type === 'seat_booked' && Number(msg.show_id) === Number(SHOW_ID)) {
+            for (const id of msg.seat_ids || []) {
               const el = document.querySelector(`.seat[data-seat-id="${id}"]`);
               if (!el) continue;
-              classify(el, 'booked');
+              classify(el,'booked');
               myLocked.delete(id);
               selected.delete(id);
             }
             updateSummary();
-          } else if (msg.type === 'error') {
-            console.warn("WS error:", msg.message);
           }
-        } catch (e) {
-          console.warn("Non-JSON WS message", evt.data);
+        } catch(e) {
+          console.warn("WS parse error", e);
         }
       };
-
       ws.onclose = () => {
         if (extendTimer) { clearInterval(extendTimer); extendTimer = null; }
       };
     }
 
     async function proceed() {
-      const seats = Array.from(selected);
-      if (!seats.length) return;
-
+      const seatsArr = Array.from(selected);
+      if (!seatsArr.length) return;
       const payload = {
         user_id: Number(USER_ID),
         show_id: Number(SHOW_ID),
         booking_reference: "string",
         booking_status: "PENDING",
         payment_id: 0,
-        discount_id: 2,         // adjust as needed
+        discount_id: 2,
         booking_time: new Date().toISOString(),
         amount: 0,
-        seats,
-        foods: []               // add UI for foods if needed
+        seats: seatsArr,
+        foods: []
       };
       const res = await fetch(`${API_BASE}/bookings/`, {
         method: "POST",
@@ -272,7 +297,7 @@
         body: JSON.stringify(payload)
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
+        const err = await res.json().catch(()=>({}));
         alert("Booking failed: " + (err.detail || res.statusText));
         return;
       }
@@ -281,8 +306,6 @@
     }
 
     document.getElementById('proceed').addEventListener('click', proceed);
-
-    // initialize event handlers and WS
     bindSeatClicks();
     updateSummary();
     connectWS();

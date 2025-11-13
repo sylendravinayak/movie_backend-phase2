@@ -96,7 +96,7 @@ def get_bookings(
     limit: int = 10,
     user_id: Optional[int] = Query(None),
     show_id: Optional[int] = Query(None),
-    current_user: dict = Depends(getcurrent_user(UserRole.ADMIN.value))
+    current_user: dict = Depends(JWTBearer())
 ):
     filters = {}
     if user_id is not None:
@@ -205,7 +205,7 @@ async def delete_booking(booking_id: int, db: Session = Depends(get_db), payload
                 SeatLock.seat_id == int(bs.seat_id),
             ).first()
             if lock:
-                lock.status = getattr(SeatLockStatusEnum, "EXPIRED", "EXPIRED")
+                lock.status = SeatLockStatusEnum.EXPIRED
                 if hasattr(lock, "expire_at"):
                     lock.expire_at = _utcnow()
                 db.add(lock)

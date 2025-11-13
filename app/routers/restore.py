@@ -4,115 +4,64 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
-
-from crud.backup_crud import BackupService  # noqa: F401
-from utils.auth.jwt_bearer import getcurrent_user
+from schemas.backup_restore import RestoreCreate
+from crud.backup_crud import BackupService  # ensure path matches your project layout
 
 router = APIRouter(prefix="/restores", tags=["restores"])
 
 
-# ----- Dependencies -----
-
-
-def get_mongo_db(request: Request) -> AsyncIOMotorDatabase:
+# Dependency that reuses the same DB object as your backups router
+def _get_mongo_db() -> AsyncIOMotorDatabase:
     """
-    Resolve the motor AsyncIOMotorDatabase from app.state.
-    Avoid boolean evaluation of Database objects (they don't implement __bool__).
+    Resolve the motor AsyncIOMotorDatabase from the same module your backups router uses.
+    This mirrors the backups router's approach so both routers share the exact same client/db.
     """
-    db = getattr(request.app.state, "mongo_db", None)
-    if db is None:
-        db = getattr(request.app.state, "db", None)
-
-    if db is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Mongo database not initialized on app.state.mongo_db or app.state.db",
-        )
-    return db
+    # Import inside the function to avoid import-time side effects and to match backups router pattern
+    from database import db as mongo_db 
+    return mongo_db
 
 
-class CurrentUser(BaseModel):
-    id: int = Field(..., description="Authenticated admin's user id")
+def _get_service(mdb: AsyncIOMotorDatabase = Depends(_get_mongo_db)):
+    return BackupService(mdb)
 
 
-async def get_current_admin(user: Any = Depends(getcurrent_user)) -> CurrentUser:
-    """
-    Wrap getcurrent_user (which returns a user-like object).
-    getcurrent_user now accepts an optional role query param, so absence of ?role won't raise a validation error.
-    """
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-
-    uid = getattr(user, "id", None) or (user.get("id") if isinstance(user, dict) else None)
-    try:
-        return CurrentUser(id=int(uid))
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid user identity")
-
-
-# ----- Schemas -----
-
-
-class RestoreType(str, Enum):
-    postgres = "postgres"
-    mongodb = "mongodb"
-    both = "both"
-
-
-class RestoreCreate(BaseModel):
-    backupId: str = Field(..., description="Mongo ObjectId of the backup to restore from")
-    restoreType: RestoreType = Field(..., description="Which system(s) to restore")
-    notes: Optional[str] = Field(None, description="Optional notes for this restore operation")
 
 
 # ----- Routes -----
-
-
-@router.post("", response_model=Dict[str, Any], status_code=status.HTTP_202_ACCEPTED)
+@router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=None)
 async def create_restore(
     payload: RestoreCreate,
-    db: AsyncIOMotorDatabase = Depends(get_mongo_db),
-    current_admin: CurrentUser = Depends(get_current_admin),
+    admin_id: int = Query(0, description="ID of the admin/user performing the restore"),
+    svc: BackupService = Depends(_get_service),
 ):
     """
     Trigger a restore operation from a previously completed backup.
-    Returns the created restore record.
+    Uses the same Motor DB/client as the backups router via the _get_mongo_db dependency.
     """
-    service = BackupService(db=db)
-    try:
-        result = await service.restore_backup(payload, admin_id=current_admin.id)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
-    return result
+    return await svc.restore_backup(payload, admin_id)
 
 
-@router.get("", response_model=List[Dict[str, Any]])
+@router.get("", response_model=None)
 async def list_restores(
     limit: int = Query(50, ge=1, le=500),
-    db: AsyncIOMotorDatabase = Depends(get_mongo_db),
+    svc: BackupService = Depends(_get_service),
 ):
     """
     List recent restore operations (most recent first).
     """
-    service = BackupService(db=db)
-    try:
-        return await service.list_restores(limit=limit)
-    except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+    return await svc.list_restores(limit=limit)
 
 
-@router.get("/{restore_id}", response_model=Dict[str, Any])
+@router.get("/{restore_id}", response_model=None)
 async def get_restore(
     restore_id: str,
-    db: AsyncIOMotorDatabase = Depends(get_mongo_db),
+    db: AsyncIOMotorDatabase = Depends(_get_mongo_db),
 ):
     """
-    Fetch a single restore operation by its id.
+    Fetch a single restore operation by its id using the same DB object as the backups router.
     """
     if not ObjectId.is_valid(restore_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid restore ID")

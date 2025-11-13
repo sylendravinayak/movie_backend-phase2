@@ -16,7 +16,7 @@ import shutil
 from utils.config import Settings
 settings = Settings()
 
-# Use the existing SQLAlchemy URL from app.database
+# Use the existing SQLAlchemy URL from app.database (optional)
 try:
     # Import lazily so this file can be imported in tooling contexts too
     from database import SQLALCHEMY_DATABASE_URL as PG_URL  # e.g. postgresql://user:pass@host/db
@@ -29,20 +29,22 @@ MAX_FILE_SIZE = 90 * 1024 * 1024
 
 class BackupService:
     def __init__(self, db: AsyncIOMotorDatabase, postgres_db: Session | None = None):
-        # Raw motor collections (simple, no schema coupling)
+        # Use the DB object passed in; do not create a new client here
         self.backups_collection = db.backups
         self.restores_collection = db.restores
 
         self.postgres_db = postgres_db
 
-        # GitHub config: set via environment (recommended)
-        # GITHUB_BACKUP_TOKEN: a classic PAT or fine-grained PAT with contents:write
-        # GITHUB_BACKUP_OWNER: org or username
-        # GITHUB_BACKUP_REPO: repo name
-        self.github_token = os.getenv("githubtoken", "")
-        self.github_repo = "backup"
-        self.github_owner = "sylendravinayak"
-        self.github_branch = "main"
+        # GitHub config: set via environment (recommended). Accept multiple env names.
+        self.github_token = (
+            os.getenv("GITHUB_BACKUP_TOKEN")
+            or os.getenv("githubtoken")
+            or os.getenv("GITHUB_TOKEN")
+            or ""
+        )
+        self.github_repo = os.getenv("GITHUB_BACKUP_REPO") or os.getenv("GITHUB_REPO") or "backup"
+        self.github_owner = os.getenv("GITHUB_BACKUP_OWNER") or os.getenv("GITHUB_OWNER") or "sylendravinayak"
+        self.github_branch = os.getenv("GITHUB_BACKUP_BRANCH") or "main"
 
         # Mongo config
         self.mongo_url = settings.MONGODB_URL
@@ -56,7 +58,8 @@ class BackupService:
     async def create_postgres_backup(self, tables: Optional[List[str]] = None) -> Tuple[str, str, int]:
         """
         Uses pg_dump with --dbname="{PG_URL}" so you don't need to split host/user/etc.
-        Requires pg_dump in PATH. Consider using the existing project helper if you prefer auto-discovery.
+        Requires pg_dump in PATH.
+        Returns tuple: (filepath, filename, size_bytes)
         """
         if not PG_URL:
             raise HTTPException(status_code=500, detail="DATABASE_URL / SQLALCHEMY_DATABASE_URL not configured")
@@ -64,12 +67,10 @@ class BackupService:
         timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
         filename = f"postgres_backup_{timestamp}.sql"
         backups_dir = os.path.join("backups")
+        os.makedirs(backups_dir, exist_ok=True)
         filepath = os.path.join(backups_dir, filename)
 
-        os.makedirs(backups_dir, exist_ok=True)
-
-        # Build pg_dump command
-        base = ['pg_dump', f'--dbname={PG_URL}', '--clean', '--if-exists', f'-f', filepath]
+        base = ['pg_dump', f'--dbname={PG_URL}', '--clean', '--if-exists', '-f', filepath]
         if tables:
             for t in tables:
                 base.extend(['-t', t])
@@ -85,6 +86,7 @@ class BackupService:
         """
         Uses mongodump with the configured Mongo URI and db name.
         Requires mongodump in PATH.
+        Returns tuple: (archive_path, filename, size_bytes)
         """
         if not self.mongo_url:
             raise HTTPException(status_code=500, detail="MONGODB_URL not configured")
@@ -111,6 +113,7 @@ class BackupService:
     async def upload_to_github(self, filepath: str, filename: str) -> str:
         """
         Uploads a file via GitHub Contents API to the configured repo/branch.
+        Returns the html_url for the created file.
         """
         if not (self.github_token and self.github_owner and self.github_repo):
             raise HTTPException(status_code=500, detail="GitHub backup env not set (GITHUB_BACKUP_TOKEN/OWNER/REPO)")
@@ -124,7 +127,7 @@ class BackupService:
             )
 
         with open(filepath, 'rb') as f:
-            content = base64.b64encode(f.read()).decode()
+            content_b64 = base64.b64encode(f.read()).decode()
 
         url = f"https://api.github.com/repos/{self.github_owner}/{self.github_repo}/contents/{filename}"
 
@@ -135,11 +138,11 @@ class BackupService:
 
         data = {
             "message": f"Backup: {filename}",
-            "content": content,
+            "content": content_b64,
             "branch": self.github_branch
         }
 
-        response = requests.put(url, headers=headers, json=data)
+        response = requests.put(url, headers=headers, json=data, timeout=60)
         if response.status_code not in (200, 201):
             try:
                 detail = response.json()
@@ -152,16 +155,19 @@ class BackupService:
     async def download_from_github(self, github_url: str, filename: str) -> str:
         """
         Downloads a raw file from GitHub (given the html_url returned by upload).
+        Returns local filepath.
         """
         if not self.github_token:
             raise HTTPException(status_code=500, detail="GITHUB_BACKUP_TOKEN not configured")
 
+        # Convert html_url to raw URL. Example:
+        # https://github.com/owner/repo/blob/main/path -> https://raw.githubusercontent.com/owner/repo/main/path
         raw_url = github_url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
 
         headers = {"Authorization": f"token {self.github_token}"}
-        response = requests.get(raw_url, headers=headers)
+        response = requests.get(raw_url, headers=headers, timeout=60)
         if response.status_code != 200:
-            raise Exception(f"GitHub download failed: {response.status_code}")
+            raise Exception(f"GitHub download failed: status {response.status_code} - {response.text}")
 
         restores_dir = os.path.join("restores")
         os.makedirs(restores_dir, exist_ok=True)
@@ -174,27 +180,27 @@ class BackupService:
 
     async def restore_postgres(self, filepath: str) -> bool:
         """
-        Restores using psql --dbname=URL -f filepath
+        Restores PostgreSQL using psql --dbname=URL -f filepath
         """
         if not PG_URL:
             raise HTTPException(status_code=500, detail="DATABASE_URL / SQLALCHEMY_DATABASE_URL not configured")
 
         cmd = ['psql', f'--dbname={PG_URL}', '-f', filepath]
         result = subprocess.run(cmd, capture_output=True, text=True)
-        # psql may return 0 even with NOTICEs; fail if ERROR appears
+        # psql may return 0 even with NOTICEs; treat non-zero or explicit ERROR as failure
         if result.returncode != 0 or "ERROR" in (result.stderr or ""):
-            raise Exception(f"PostgreSQL restore failed: {result.stderr}")
+            raise Exception(f"PostgreSQL restore failed: {result.stderr or result.stdout}")
         return True
 
     async def restore_mongodb(self, filepath: str) -> bool:
         """
-        Restores using mongorestore to the configured db.
+        Restores MongoDB using mongorestore to the configured db.
         """
         if not self.mongo_url:
             raise HTTPException(status_code=500, detail="MONGODB_URL not configured")
 
-        print(f"Restoring MongoDB from: {filepath}")
-        print(f"Target database: {self.mongo_db_name}")
+        print(f"[restore_debug] Restoring MongoDB from: {filepath}")
+        print(f"[restore_debug] Target database: {self.mongo_db_name}")
 
         cmd = [
             'mongorestore',
@@ -205,20 +211,18 @@ class BackupService:
             '--drop',
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
-        print(f"Restore output:\n{result.stderr}")
+        print(f"[restore_debug] mongorestore output:\n{result.stderr or result.stdout}")
 
+        # mongorestore can return non-zero codes for some warnings; check stderr for success phrase
         if result.returncode != 0 and "successfully" not in (result.stderr or "").lower():
-            raise Exception(f"MongoDB restore failed: {result.stderr}")
-
+            raise Exception(f"MongoDB restore failed: {result.stderr or result.stdout}")
         return True
 
     async def create_backup(self, data, admin_id: int):
         """
-        data must have:
-          - backupType: 'postgres' | 'mongodb' | 'both'
-          - tables: Optional[List[str]]
-          - notes: Optional[str]
-        Persists a document in Mongo 'backups' collection.
+        Creates a backup (postgres, mongodb, or both), uploads artifacts to GitHub,
+        and persists a document in the backups collection.
+        Expects data.backupType (enum-like), optional data.tables, optional data.notes.
         """
         operation_id = self._generate_operation_id("backup")
 
@@ -241,10 +245,10 @@ class BackupService:
         backup_id = str(result.inserted_id)
 
         try:
-            # Create artifacts
-            if str(data.backupType) in ("postgres",) or getattr(data.backupType, "value", "") == "postgres":
+            btype_value = getattr(data.backupType, "value", str(data.backupType))
+            if btype_value == "postgres":
                 filepath, filename, size = await self.create_postgres_backup(getattr(data, "tables", None))
-            elif str(data.backupType) in ("mongodb",) or getattr(data.backupType, "value", "") == "mongodb":
+            elif btype_value == "mongodb":
                 filepath, filename, size = await self.create_mongodb_backup(getattr(data, "tables", None))
             else:
                 # both
@@ -256,11 +260,10 @@ class BackupService:
 
             # Upload to GitHub
             if isinstance(filepath, list):
-                github_urls = []
+                github_urls: List[str] = []
                 for fp, fn in zip(filepath, filename):
                     github_url = await self.upload_to_github(fp, fn)
                     github_urls.append(github_url)
-                    # Clean local file
                     try:
                         os.remove(fp)
                     except Exception:
@@ -299,22 +302,91 @@ class BackupService:
 
         backup = await self.backups_collection.find_one({"_id": ObjectId(backup_id)})
         backup['id'] = str(backup.pop('_id'))
-        return backup  # dict compatible with your existing responses
+        return backup
 
     async def restore_backup(self, data, admin_id: int):
         """
-        data must have:
-          - backupId: str (ObjectId)
-          - restoreType: 'postgres' | 'mongodb' | 'both'
-          - notes: Optional[str]
-        Persists a document in Mongo 'restores' collection.
+        Restores from a previously completed backup.
+        Accepts data.backupId (string — ObjectId hex or other identifier), data.restoreType, optional notes.
+        Persists a document in the restores collection and performs the restore steps.
         """
-        if not ObjectId.is_valid(data.backupId):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid backup ID")
+        raw_id = getattr(data, "backupId", None)
+        if not raw_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="backupId is required")
 
-        backup = await self.backups_collection.find_one({"_id": ObjectId(data.backupId)})
+        # Debug: print DB and collection info so we can confirm the same DB is used
+        try:
+            db_name = getattr(self.backups_collection.database, "name", "<unknown>")
+            total_docs = await self.backups_collection.count_documents({})
+            first_doc = await self.backups_collection.find_one({})
+            print(f"[restore_debug] backups_collection.database.name: {db_name}")
+            print(f"[restore_debug] backups_collection document count: {total_docs}")
+            print(f"[restore_debug] backups_collection first document (truncated): {str(first_doc)[:1000]}")
+        except Exception as exc:
+            print(f"[restore_debug] failed to introspect backups collection: {exc}")
+
+        # Build $or clauses to try multiple lookup strategies in one query
+        or_clauses = []
+
+        # If looks like ObjectId hex string, try ObjectId typed match
+        if ObjectId.is_valid(raw_id):
+            try:
+                or_clauses.append({"_id": ObjectId(raw_id)})
+            except Exception:
+                pass
+
+        # Also try raw string _id (in case _id was stored as string)
+        or_clauses.append({"_id": raw_id})
+
+        # operationId exact match
+        or_clauses.append({"operationId": raw_id})
+
+        # url substring (regex)
+        try:
+            or_clauses.append({"url": {"$regex": raw_id}})
+        except Exception:
+            pass
+
+        # filePath exact match (may be string or list element)
+        or_clauses.append({"filePath": raw_id})
+
+        backup = None
+        last_error = None
+        if or_clauses:
+            query = {"$or": or_clauses}
+            try:
+                print(f"[restore_debug] trying single $or lookup: {query}")
+                backup = await self.backups_collection.find_one(query)
+                if backup:
+                    print(f"[restore_debug] found backup via $or query")
+            except Exception as exc:
+                last_error = exc
+                print(f"[restore_debug] $or lookup failed: {exc}")
+
+        # Fallback: check filePath list membership explicitly
         if not backup:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backup not found")
+            try:
+                print("[restore_debug] fallback: checking filePath as an element inside lists")
+                backup = await self.backups_collection.find_one({"filePath": {"$elemMatch": {"$eq": raw_id}}})
+                if backup:
+                    print("[restore_debug] found backup where filePath list contains the value")
+            except Exception as exc:
+                last_error = exc
+                print(f"[restore_debug] fallback lookup failed: {exc}")
+
+        if not backup:
+            attempted = "; ".join([str(c) for c in or_clauses])
+            detail_msg = (
+                "Backup not found. Tried lookups: "
+                f"{attempted}. "
+                "Ensure you passed the exact Mongo _id string, or the operationId, or a filename/url fragment. "
+                "You can also list backups via the GET /backups endpoint to confirm available IDs."
+            )
+            if last_error:
+                detail_msg += f" DB error during lookup: {type(last_error).__name__}: {str(last_error)}"
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail_msg)
+
+        # ensure backup is completed
         if backup.get('status') != "completed":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Backup is not completed")
 
@@ -324,7 +396,7 @@ class BackupService:
             "operationId": operation_id,
             "backupType": getattr(data.restoreType, "value", str(data.restoreType)),
             "status": "in_progress",
-            "sourceBackupId": data.backupId,
+            "sourceBackupId": str(backup.get('_id')),
             "sourceUrl": backup.get('url'),
             "performedBy": admin_id,
             "startedAt": datetime.utcnow(),
@@ -337,10 +409,24 @@ class BackupService:
         restore_id = str(result.inserted_id)
 
         try:
-            urls = backup['url'].split(", ") if ", " in backup['url'] else [backup['url']]
-            filenames = backup['filePath'] if isinstance(backup['filePath'], list) else [backup['filePath']]
+            urls = backup.get('url') or ""
+            urls = urls.split(", ") if urls and ", " in urls else [urls] if urls else []
+            filenames_field = backup.get('filePath')
+            filenames = filenames_field if isinstance(filenames_field, list) else [filenames_field] if filenames_field else []
 
-            if str(data.restoreType) in ("postgres",) or getattr(data.restoreType, "value", "") == "postgres":
+            # Basic normalization/validation
+            if (not urls or not filenames) or (urls and filenames and len(urls) != len(filenames)):
+                if len(urls) == 1 and len(filenames) == 1:
+                    pass
+                elif len(urls) == 0 and len(filenames) == 1:
+                    raise Exception("No source URL available for this backup")
+                else:
+                    # allow best-effort but watch for IndexError later
+                    pass
+
+            # Choose restore steps based on requested type
+            rt_value = getattr(data.restoreType, "value", str(data.restoreType))
+            if rt_value == "postgres":
                 filepath = await self.download_from_github(urls[0], filenames[0])
                 await self.restore_postgres(filepath)
                 try:
@@ -348,7 +434,7 @@ class BackupService:
                 except Exception:
                     pass
 
-            elif str(data.restoreType) in ("mongodb",) or getattr(data.restoreType, "value", "") == "mongodb":
+            elif rt_value == "mongodb":
                 idx = 1 if len(urls) > 1 else 0
                 filepath = await self.download_from_github(urls[idx], filenames[idx])
                 await self.restore_mongodb(filepath)
@@ -357,8 +443,7 @@ class BackupService:
                 except Exception:
                     pass
 
-            else:
-                # both
+            else:  # both
                 for url, filename in zip(urls, filenames):
                     filepath = await self.download_from_github(url, filename)
                     if filename.endswith('.sql'):
@@ -410,6 +495,7 @@ class BackupService:
         return out
 
     async def get_backup(self, backup_id: str) -> dict:
+        # Accept ObjectId-typed _id
         if not ObjectId.is_valid(backup_id):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid backup ID")
         backup = await self.backups_collection.find_one({"_id": ObjectId(backup_id)})

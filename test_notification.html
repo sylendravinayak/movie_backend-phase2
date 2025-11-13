@@ -2,7 +2,7 @@
 <html>
 <body>
 <script>
-let ws = new WebSocket("ws://localhost:8000/ws/notifications?user_id=1");
+let ws = new WebSocket("ws://localhost:8000/ws/notifications?user_id=6");
 ws.onmessage = e => console.log("🔔", e.data);
 ws.onopen = () => console.log("✅ WS connected");
 ws.onerror = e => console.log("❌ WS error", e);

@@ -11,7 +11,6 @@ from . import ORMModel, ScreenType, ShowStatus
 # 3. SCREEN
 class ScreenBase(ORMModel):
     screen_name: str = Field(..., max_length=50)
-    total_seats: int = Field(..., ge=0)
     screen_type: str =Field(..., max_length=50)
     is_available: bool = True
 
@@ -22,7 +21,6 @@ class ScreenCreate(ScreenBase):
 
 class ScreenUpdate(ORMModel):
     screen_name: Optional[str] = Field(None, max_length=50)
-    total_seats: Optional[int] = Field(None, ge=0)
     screen_type: Optional[str] = None
     is_available: Optional[bool] = None
 

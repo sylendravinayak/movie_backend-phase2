@@ -26,7 +26,7 @@ router = APIRouter(prefix="/feedbacks", tags=["Feedback"])
 
 
 @router.post("", response_model=FeedbackOut, status_code=status.HTTP_201_CREATED)
-def create_feedback(payload: FeedbackCreate, db: Session = Depends(get_db), current_user: dict = Depends(getcurrent_user(UserRole.ADMIN.value))) -> FeedbackOut:
+def create_feedback(payload: FeedbackCreate, db: Session = Depends(get_db), current_user: dict = Depends(JWTBearer())) -> FeedbackOut:
     fb = feedback_crud.create_feedback(
         db,
         booking_id=payload.booking_id,

@@ -8,20 +8,7 @@ from pydantic import BaseModel, Field
 from crud.backup_crud import BackupService  # correct import
 
 router = APIRouter(prefix="/backups", tags=["Backups"])
-
-
-# Use Enum (more robust across Pydantic versions than Literal)
-class BackupType(str, Enum):
-    postgres = "postgres"
-    mongodb = "mongodb"
-    both = "both"
-
-
-class BackupRequest(BaseModel):
-    backupType: BackupType = Field(..., description="Which systems to backup")
-    tables: Optional[List[str]] = Field(default=None, description="Postgres tables to include (optional)")
-    notes: Optional[str] = Field(default=None, description="Free-form notes for this backup")
-
+from schemas.backup_restore import BackupRequest  # correct import
 
 def _get_mongo_db():
     # Avoid type-annotating dependencies with third-party types to prevent FastAPI field coercion

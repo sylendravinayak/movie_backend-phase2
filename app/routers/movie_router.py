@@ -47,8 +47,7 @@ def get_all_movies(
     genre: Optional[str] = None,
     language: Optional[str] = None,
     release_date_from: Optional[str] = None,
-    sort_by: Annotated[Optional[dict], Depends(parse_sort_by)] = None,
-    payload:dict=Depends(JWTBearer())
+    sort_by: Annotated[Optional[dict], Depends(parse_sort_by)] = None
 ):
     filters = {
         "genre": genre,
@@ -69,7 +68,7 @@ def get_all_movies(
     return movies
 
 @router.get("/{movie_id}",response_model=MovieOut)
-def get_movie(movie_id: int, db: Session = Depends(get_db),  payload:dict=Depends(JWTBearer())):
+def get_movie(movie_id: int, db: Session = Depends(get_db)):
     movie = movie_crud.get(db=db, id=movie_id)
     if not movie:
         raise HTTPException(status_code=404, detail="Movie not found")
@@ -155,3 +154,4 @@ def import_tmdb_movie(
     # Create the movie
     movie = movie_crud.create(db=db, obj_in=MovieCreate(**mapped))
     return movie
+
