@@ -10,11 +10,11 @@ from schemas import UserRole
 router = APIRouter(prefix="/food-categories", tags=["Food Categories"])
 
 @router.get("/", response_model=List[FoodCategoryResponse])
-def get_all_food_categories(db: Session = Depends(get_db), skip: int = 0, limit: int = 10,payload:dict=Depends(JWTBearer())):
+def get_all_food_categories(db: Session = Depends(get_db), skip: int = 0, limit: int = 10):
     return food_category_crud.get_all(db=db, skip=skip, limit=limit)
 
 @router.get("/{category_id}", response_model=FoodCategoryResponse)
-def get_food_category(category_id: int, db: Session = Depends(get_db),payload:dict=Depends(JWTBearer())):
+def get_food_category(category_id: int, db: Session = Depends(get_db)):
     category = food_category_crud.get(db, category_id)
     if not category:
         raise HTTPException(status_code=404, detail="Food Category not found")

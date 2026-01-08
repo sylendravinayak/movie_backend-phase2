@@ -16,18 +16,18 @@ def get_all_food_items(
     limit: int = 10,
     category_id: Optional[int] = Query(None, description="Filter by category_id"),
     is_available: Optional[bool] = Query(None, description="Filter by availability"),
-    payload:dict=Depends(JWTBearer())
+    search: str = Query("", description="Filter by name")
 ):
     filters = {}
     if category_id is not None:
         filters["category_id"] = category_id
     if is_available is not None:
         filters["is_available"] = is_available
-    return food_item_crud.get_all(db=db, skip=skip, limit=limit, filters=filters)
+    return food_item_crud.get_all( db=db,skip=skip, limit=limit, filters=filters, name=search)
 
 # Get single food item
 @router.get("/{food_id}", response_model=FoodItemResponse)
-def get_food_item(food_id: int, db: Session = Depends(get_db),payload:dict=Depends(JWTBearer())):
+def get_food_item(food_id: int, db: Session = Depends(get_db)):
     item = food_item_crud.get(db, food_id)
     if not item:
         raise HTTPException(status_code=404, detail="Food item not found")

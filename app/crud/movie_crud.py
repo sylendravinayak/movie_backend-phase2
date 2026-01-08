@@ -12,6 +12,14 @@ class CRUDMovie(CRUDBase[Movie, MovieCreate, MovieUpdate]):
                     query = query.filter(Movie.genre.any(value))
                 if attr == "language" and value:
                     query = query.filter(Movie.language.any(value))
+                if attr == "is_active" and value is not None:
+                    query = query.filter(Movie.is_active == value)
+                if attr == "title" and value:
+                    query = query.filter(Movie.title.ilike(f"%{value}%"))
+                if attr == "release_date_to" and value:
+                    query = query.filter(Movie.release_date <= value)
+                if attr == "format" and value:
+                    query = query.filter(Movie.format.any(value))
                 if attr == "release_date_from" and value:
                     query = query.filter(Movie.release_date >= value)
         if sort_by:

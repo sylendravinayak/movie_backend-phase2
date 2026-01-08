@@ -47,12 +47,14 @@ def get_all_movies(
     genre: Optional[str] = None,
     language: Optional[str] = None,
     release_date_from: Optional[str] = None,
-    sort_by: Annotated[Optional[dict], Depends(parse_sort_by)] = None
+    sort_by: Annotated[Optional[dict], Depends(parse_sort_by)] = None,
+    format: Optional[str] = None
 ):
     filters = {
         "genre": genre,
         "language": language,
-        "release_date_from": release_date_from
+        "release_date_from": release_date_from,
+        "format": format
     }
 
     # Clean out None values before passing to CRUD

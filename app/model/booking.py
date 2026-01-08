@@ -4,6 +4,7 @@ from datetime import datetime
 from enum import Enum
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Enum as SAEnum,
@@ -142,4 +143,14 @@ class Discount(Base):
 
     discount_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     promo_code = Column(String(50), nullable=False, unique=True)
-    discount_percent = Column(Integer, nullable=False)
+    discount_type = Column(String(20), nullable=False, default="percent")  # values: 'percent' | 'flat'
+    discount_percent = Column(Integer, nullable=True)  # e.g., 10 for 10%
+    max_discount_amount = Column(Numeric(10, 2), nullable=True)
+    discount_amount = Column(Numeric(10, 2), nullable=True)  # e.g., 200.00
+    min_subtotal = Column(Numeric(10, 2), nullable=True, default=0)
+    starts_at = Column(DateTime(timezone=True), nullable=True)
+    ends_at = Column(DateTime(timezone=True), nullable=True)
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    usage_limit_per_user = Column(Integer, nullable=True)   # e.g., each user can use max 1 time
+    applicable_show_id = Column(Integer, nullable=True)     # scope to a specific show
+    applicable_movie_id = Column(Integer, nullable=True)

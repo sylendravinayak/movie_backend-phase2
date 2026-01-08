@@ -22,9 +22,11 @@ class MovieBase(ORMModel):
     background_image_url: Optional[str] = Field(None, max_length=255)
     certificate: Optional[str] = Field(None, max_length=10)
     poster_url: Optional[str] = Field(None, max_length=255)
+    format: Optional[list[str]] = Field(None, description="List of formats, e.g., 2D, 3D, IMAX")
     is_active: bool = True
     cast: Optional[list[dict]] = None
     crew: Optional[list[dict]] = None
+    imdb_id: Optional[str] = Field(None, max_length=20)
 
 
 class MovieCreate(MovieBase):
@@ -40,6 +42,7 @@ class MovieUpdate(ORMModel):
     genres: Optional[list[str]] = Field(None, max_length=50)
     release_date: Optional[date] = None
     background_image_url: Optional[str] = Field(None, max_length=255)
+
     certificate: Optional[str] = Field(None, max_length=10)
     poster_url: Optional[str] = Field(None, max_length=255)
     is_active: Optional[bool] = None

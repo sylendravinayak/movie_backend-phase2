@@ -1,8 +1,9 @@
 from datetime import datetime, date, time, timedelta
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
-
+from utils.movie_scheduler.graph import app 
 from database import get_db
 from model import Show, Screen, Movie, Booking, BookedSeat, BookedFood
 from model.theatre import ShowStatusEnum
@@ -19,6 +20,9 @@ from sqlalchemy.orm import Session
 from utils.autoschedule import persist_schedule,WarningEntry,ScheduledShow,greedy_day_schedule_with_windows
 router = APIRouter(prefix="/shows", tags=["Shows"])
 
+class WeeklyScheduleRequest(BaseModel):
+    movie_ids: list[int]
+    start_date: date
 
 @router.post("/", response_model=ShowOut, status_code=status.HTTP_201_CREATED)
 def create_show(show_in: ShowCreate, db: Session = Depends(get_db)):
@@ -74,8 +78,7 @@ def get_all_shows(
     movie_id: Optional[int] = None,
     screen_id: Optional[int] = None,
     status: Optional[str] = None,
-    show_date: Optional[str] = Query(None, description="Filter by show date (YYYY-MM-DD)"),
-    payload: dict = Depends(JWTBearer())
+    show_date: Optional[str] = Query(None, description="Filter by show date (YYYY-MM-DD)")
 ):
     filters = {}
     if movie_id:
@@ -212,6 +215,27 @@ def hybrid_auto_schedule(
     )
 
 
+@router.post("/generate-weekly")
+def generate_weekly_schedule(
+    request: WeeklyScheduleRequest,
+    db: Session = Depends(get_db),
+):
+    result = app.invoke({
+        "db": db,
+        "Movie": Movie,
+        "movie_ids": request.movie_ids,
+        "start_date": request.start_date,
+    })
+
+    # 🔥 DO NOT RETURN `result` DIRECTLY 🔥
+    return {
+        "status": result.get("status", "OK"),
+        "movies_scheduled": len(request.movie_ids),
+        "start_date": request.start_date,
+    }
+
+
+
 @router.get("/available-slots")
 def get_available_slots(
     screen_id: int,
@@ -296,3 +320,64 @@ def update_show(show_id: int, show_in: ShowUpdate, db: Session = Depends(get_db)
 #@router.delete("/{show_id}")
 def delete_show(show_id: int, db: Session = Depends(get_db)):
     return show_crud.remove(db=db, id=show_id)
+
+
+@router.get("/seats/{show_id}")
+def get_show_details(show_id: int, db: Session = Depends(get_db)):
+    show = (
+        db.query(Show)
+        .filter(Show.show_id == show_id)
+        .first()
+    )
+
+    if not show:
+        raise HTTPException(status_code=404, detail="Show not found")
+
+    # Fetch booked seats
+    booked_seat_ids = (
+        db.query(BookedSeat.seat_id)
+        .filter(BookedSeat.show_id == show_id)
+        .all()
+    )
+    booked_seat_ids = [x[0] for x in booked_seat_ids]
+
+    return {
+        "show_id": show.show_id,
+        "show_date": show.show_date,
+        "show_time": show.show_time,
+        "movie": {
+            "movie_id": show.movie.movie_id,
+            "title": show.movie.title,
+            "poster_url": show.movie.poster_url
+        },
+        "screen": {
+            "screen_id": show.screen.screen_id,
+            "screen_name": show.screen.screen_name
+        },
+        "seat_categories": [
+            {
+                "category_id": c.category_id,
+                "category_name": c.category_name,
+                "price": (
+    next(
+        (p for p in show.category_pricing if p.category_id == c.category_id),
+        None
+    ).price
+    if show.category_pricing else None
+),
+
+                "seats": [
+                    {
+                        "seat_id": s.seat_id,
+                        "seat_no": s.seat_number,
+                        "row": s.row_number,
+                        "col": s.col_number,
+                        "available": s.is_available
+                    }
+                    for s in c.seats
+                ]
+            }
+            for c in show.screen.categories
+        ],
+        "booked_seat_ids": booked_seat_ids
+    }

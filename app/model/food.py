@@ -25,6 +25,7 @@ class FoodItem(Base):
     category_id = Column(Integer, ForeignKey("food_categories.category_id", ondelete="SET NULL"), nullable=True)
     is_available = Column(Boolean, nullable=False, server_default="true")
     image_url = Column(String(255), nullable=True)
+    is_veg = Column(Boolean, nullable=True)
 
     __table_args__ = (
         Index("ix_food_items_category_id", "category_id"),

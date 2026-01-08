@@ -16,12 +16,13 @@ def create_seat(seat: List[SeatCreate], db: Session = Depends(get_db), current_u
 
 
 @router.get("/", response_model=List[SeatOut])
-def get_all_seats(db: Session = Depends(get_db), skip: int = 0, limit: int = 10,payload: dict = Depends(JWTBearer())):
+def get_all_seats(db: Session = Depends(get_db), skip: int = 0, limit: int = 10,screen_id:int=0):
     """Fetch all seats"""
-    return seat_crud.get_all(db=db, skip=skip, limit=limit)
+    filter={"screen_id":screen_id} if screen_id!=0 else {}
+    return seat_crud.get_all(db=db, skip=skip, limit=limit,filters=filter)
 
 @router.get("/{seat_id}", response_model=SeatOut)
-def get_seat(seat_id: int, db: Session = Depends(get_db), payload: dict = Depends(JWTBearer())):
+def get_seat(seat_id: int, db: Session = Depends(get_db)):
     """Fetch a seat by ID"""
     db_seat = seat_crud.get(db=db, id=seat_id)
     if not db_seat:

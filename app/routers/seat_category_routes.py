@@ -24,8 +24,7 @@ def get_all_categories(
     category_name: Optional[str] = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
-    db: Session = Depends(get_db),
-    current_user:dict=Depends(getcurrent_user(UserRole.ADMIN.value))
+    db: Session = Depends(get_db)
 ):
     filters = {"screen_id": screen_id, "category_name": category_name}
     return seat_category_crud.get_all(db, skip=skip, limit=limit, filters=filters)

@@ -68,6 +68,8 @@ class Show(Base):
     end_time = Column(Time, nullable=False)
     status = Column(SAEnum(ShowStatusEnum, name="show_status_enum"), nullable=False, server_default=ShowStatusEnum.UPCOMING.value)
     created_at = Column(DateTime(timezone=True), default=dt.utcnow, nullable=False)
+    format = Column(String(50), nullable=False)  # e.g., 2D, 3D, IMAX
+    language = Column(String(50), nullable=False)  # e.g., Tamil, English
 
     # Relations
     movie = relationship("Movie", back_populates="shows")

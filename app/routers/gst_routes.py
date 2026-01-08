@@ -15,6 +15,13 @@ def create_gst(data: GSTCreate, db: Session = Depends(get_db)):
 def list_gst(db: Session = Depends(get_db)):
     return gst_crud.get_all(db)
 
+@router.get("/{category}", response_model=GSTOut)
+def get_gst_by_category(category: str, db: Session = Depends(get_db)):
+    gst_record = gst_crud.get_by_category(db, category)
+    if not gst_record:
+        raise HTTPException(status_code=404, detail="GST record not found")
+    return gst_record
+
 @router.put("/{gst_id}", response_model=GSTOut)
 def update_gst(gst_id: int, data: GSTUpdate, db: Session = Depends(get_db)):
     gst_record = gst_crud.get(db, gst_id)

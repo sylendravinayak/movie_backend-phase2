@@ -14,7 +14,7 @@ def create_screen(screen: ScreenCreate, db: Session = Depends(get_db), current_u
     return screen_crud.create(db=db, obj_in=screen)
 
 @router.get("/", response_model=List[ScreenOut])
-def get_all_screens(db: Session = Depends(get_db), skip: int = 0, limit: int = 10,name: str = None,type: str = None,total_seats: int = None,is_available: bool = None,payload=Depends(JWTBearer())):
+def get_all_screens(db: Session = Depends(get_db), skip: int = 0, limit: int = 10,name: str = None,type: str = None,total_seats: int = None,is_available: bool = None):
     """Fetch all screens"""
     filters={
         "screen_name": name,
@@ -26,7 +26,7 @@ def get_all_screens(db: Session = Depends(get_db), skip: int = 0, limit: int = 1
 
 
 @router.get("/{screen_id}", response_model=ScreenOut)
-def get_screen(screen_id: int, db: Session = Depends(get_db),payload=Depends(JWTBearer())):
+def get_screen(screen_id: int, db: Session = Depends(get_db)):
     """Fetch a screen by ID"""
     db_screen = screen_crud.get(db=db, id=screen_id)
     if not db_screen:

@@ -63,10 +63,14 @@ seatlock_crud = SeatLockCRUD()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:4200",
+        "http://127.0.0.1:4200",
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
+    expose_headers=["*"],
 )
 @app.middleware("http")
 async def global_single_middleware(request: Request, call_next):

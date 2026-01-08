@@ -10,6 +10,7 @@ class Movie(Base):
     description=Column(String(1000), nullable=True)
     duration=Column(Integer, nullable=False)  # in minutes
     genre=Column(ARRAY(String(50)), nullable=True)
+    format=Column(ARRAY(String(50)), nullable=True)  # e.g., 2D, 3D, IMAX
     language=Column(ARRAY(String(50)), nullable=True)
     release_date=Column(DateTime, nullable=True)
     rating=Column(Float, nullable=True)  # e.g., 4.5 out of 5.0
@@ -19,5 +20,6 @@ class Movie(Base):
     is_active=Column(Boolean, default=True)
     cast=Column(JSON, nullable=True)  # JSON string
     crew=Column(JSON, nullable=True)  # JSON string
+    imdb_id=Column(String(20), nullable=True)
 
     shows = relationship("Show", back_populates="movie", cascade="all,delete-orphan")

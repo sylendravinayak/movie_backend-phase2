@@ -30,7 +30,8 @@ class FoodItemBase(ORMModel):
     price: float
     category_id: int
     is_available: bool = True
-    image_url: Optional[str] = Field(None, max_length=255)
+    image_url: str = Field(None, max_length=255)
+    is_veg: bool = None
 
 
 class FoodItemCreate(FoodItemBase):
@@ -44,7 +45,9 @@ class FoodItemUpdate(ORMModel):
     category_id: Optional[int] = None
     is_available: Optional[bool] = None
     image_url: Optional[str] = Field(None, max_length=255)
+    is_veg: Optional[bool] = None
 
 
 class FoodItemOut(FoodItemBase):
     food_id: int
+    

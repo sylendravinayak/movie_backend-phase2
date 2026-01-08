@@ -61,6 +61,8 @@ class ShowBase(ORMModel):
     show_date: date
     show_time: time
     status: ShowStatus = ShowStatus.UPCOMING
+    format: Optional[str] = Field("2D", description="List of formats, e.g., 2D, 3D, IMAX")
+    language: Optional[str] = Field("Tamil", description="List of languages")
 
 
 class ShowCreate(ShowBase):

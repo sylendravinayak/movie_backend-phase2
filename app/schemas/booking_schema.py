@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, condecimal, conint
 from sqlalchemy import JSON
 
 
@@ -146,17 +146,91 @@ class GSTOut(GSTBase):
     gst_id: int
 
 #discount
+class DiscountBase(BaseModel):
+    promo_code: str = Field(..., max_length=50)
+    discount_type: Literal["percent", "flat"] = "percent"
 
-class DiscountBase(ORMModel):
-    promo_code: str
-    discount_percent: int
+    # For percent coupons
+    discount_percent: Optional[int] = Field(
+        None, description="Percentage value between 1 and 100 for percent-type discounts"
+    )
+    max_discount_amount: Optional[int] = Field(
+        None, description="Optional cap for percent discounts (₹)"
+    )
+
+    # For flat coupons
+    discount_amount: Optional[int] = Field(
+        None, description="Flat amount in ₹ for flat-type discounts"
+    )
+
+    # Minimum cart value required (before taxes)
+    min_subtotal: Optional[int  ] = Field(
+        0, description="Minimum subtotal before GST required to apply the coupon (₹)"
+    )
+
+    # Validity window (optional)
+    starts_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
+
+    # Active toggle
+    is_active: bool = True
+
+    # Usage limit per user
+    usage_limit_per_user: Optional[int] = Field(
+        None, description="Max times a user can redeem this code"
+    )
+
+    # Optional scoping
+    applicable_show_id: Optional[int] = Field(
+        None, description="Limit coupon to a specific show ID"
+    )
+    applicable_movie_id: Optional[int] = Field(
+        None, description="Limit coupon to a specific movie ID"
+    )
+
 
 class DiscountCreate(DiscountBase):
+    """
+    Schema for creating a Discount.
+    Enforce logical constraints in your service layer:
+    - If discount_type == 'percent' => discount_percent must be provided
+    - If discount_type == 'flat'    => discount_amount must be provided
+    """
     pass
 
-class DiscountUpdate(ORMModel):
-    promo_code: str | None = None
-    discount_percent: int | None = None
 
-class DiscountResponse(DiscountBase):
+class DiscountUpdate(BaseModel):
+    """
+    Partial update schema. All fields optional.
+    """
+    promo_code: Optional[str] = Field(None, max_length=50)
+    discount_type: Optional[Literal["percent", "flat"]] = None
+
+    discount_percent: Optional[int] = None
+    max_discount_amount: Optional[int] = None
+    discount_amount: Optional[int] = None
+
+    min_subtotal: Optional[int] = None
+
+    starts_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
+
+    is_active: Optional[bool] = None
+    usage_limit_per_user: Optional[int] = None
+
+    applicable_show_id: Optional[int] = None
+    applicable_movie_id: Optional[int] = None
+
+
+class DiscountOut(DiscountBase):
     discount_id: int
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True  # pydantic v2: allow ORM model -> schema
+
+
+# Validation request/response for applying a coupon to a cart
+
+

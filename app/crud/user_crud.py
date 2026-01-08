@@ -69,6 +69,7 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
             return {
                 "access_token": access_token,
                 "token_type": "bearer",
+                "role": user.role,
             }
         # Return None so the router can handle 401 consistently
         return None

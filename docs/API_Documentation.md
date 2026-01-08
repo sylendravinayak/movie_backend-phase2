@@ -2,7 +2,7 @@
 
 **Version:** 0.1.0
 
-**Generated on:** 2025-11-06 14:53:23
+**Generated on:** 2025-11-13 11:51:46
 
 
 ---
@@ -151,6 +151,89 @@ API Documentation
 ---
 
 
+## `/users/logout`
+
+### POST: Logout
+
+**Description:** 
+
+**Tags:** users
+
+
+**Responses:**
+
+- `200` — Successful Response
+
+
+---
+
+
+## `/users/forgot-password`
+
+### POST: Forgot Password
+
+**Description:** Request password reset link via email
+
+**Tags:** users
+
+
+**Request Body Example:**
+
+
+**Responses:**
+
+- `200` — Successful Response
+
+- `422` — Validation Error
+
+
+---
+
+
+## `/users/reset-password`
+
+### POST: Reset Password
+
+**Description:** Reset password using email token
+
+**Tags:** users
+
+
+**Request Body Example:**
+
+
+**Responses:**
+
+- `200` — Successful Response
+
+- `422` — Validation Error
+
+
+---
+
+
+## `/users/change-password`
+
+### POST: Change Password
+
+**Description:** Change password (requires current password)
+
+**Tags:** users
+
+
+**Request Body Example:**
+
+
+**Responses:**
+
+- `200` — Successful Response
+
+- `422` — Validation Error
+
+
+---
+
+
 ## `/movies/`
 
 ### POST: Create Movie
@@ -261,6 +344,56 @@ API Documentation
 **Parameters:**
 
 - `movie_id` (path) — 
+
+
+**Responses:**
+
+- `200` — Successful Response
+
+- `422` — Validation Error
+
+
+---
+
+
+## `/movies/tmdb/search`
+
+### GET: Search Tmdb Movies
+
+**Description:** Search movies on TMDB by title and return a concise list to let users pick one.
+
+**Tags:** movies
+
+
+**Parameters:**
+
+- `q` (query) — Search query for TMDB (movie title)
+
+- `page` (query) — Result page number
+
+
+**Responses:**
+
+- `200` — Successful Response
+
+- `422` — Validation Error
+
+
+---
+
+
+## `/movies/tmdb/import/{tmdb_id}`
+
+### POST: Import Tmdb Movie
+
+**Description:** Import a single TMDB movie (by tmdb_id) into local DB using MovieCreate schema mapping.
+
+**Tags:** movies
+
+
+**Parameters:**
+
+- `tmdb_id` (path) — 
 
 
 **Responses:**
@@ -704,18 +837,16 @@ API Documentation
 ---
 
 
-## `/shows/auto-schedule`
+## `/shows/auto-schedule/hybrid`
 
-### POST: Auto Schedule
+### POST: Hybrid Auto Schedule
 
 **Description:** 
 
 **Tags:** Shows
 
 
-**Parameters:**
-
-- `start_date` (query) — Start date for scheduling (YYYY-MM-DD)
+**Request Body Example:**
 
 
 **Responses:**
@@ -1031,25 +1162,6 @@ API Documentation
 
 ## `/payments/`
 
-### POST: Create Payment
-
-**Description:** 
-
-**Tags:** Payments
-
-
-**Request Body Example:**
-
-
-**Responses:**
-
-- `200` — Successful Response
-
-- `422` — Validation Error
-
-
----
-
 ### GET: Get All Payments
 
 **Description:** 
@@ -1077,51 +1189,6 @@ API Documentation
 ## `/payments/{payment_id}`
 
 ### GET: Get Payment
-
-**Description:** 
-
-**Tags:** Payments
-
-
-**Parameters:**
-
-- `payment_id` (path) — 
-
-
-**Responses:**
-
-- `200` — Successful Response
-
-- `422` — Validation Error
-
-
----
-
-### PUT: Update Payment
-
-**Description:** 
-
-**Tags:** Payments
-
-
-**Parameters:**
-
-- `payment_id` (path) — 
-
-
-**Request Body Example:**
-
-
-**Responses:**
-
-- `200` — Successful Response
-
-- `422` — Validation Error
-
-
----
-
-### DELETE: Delete Payment
 
 **Description:** 
 
@@ -1789,13 +1856,19 @@ API Documentation
 ---
 
 
-## `/restore/`
+## `/restores`
 
 ### POST: Create Restore
 
-**Description:** 
+**Description:** Trigger a restore operation from a previously completed backup.
+Uses the same Motor DB/client as the backups router via the _get_mongo_db dependency.
 
-**Tags:** Restore Logs
+**Tags:** restores
+
+
+**Parameters:**
+
+- `admin_id` (query) — ID of the admin/user performing the restore
 
 
 **Request Body Example:**
@@ -1803,23 +1876,21 @@ API Documentation
 
 **Responses:**
 
-- `200` — Successful Response
+- `202` — Successful Response
 
 - `422` — Validation Error
 
 
 ---
 
-### GET: Get All
+### GET: List Restores
 
-**Description:** 
+**Description:** List recent restore operations (most recent first).
 
-**Tags:** Restore Logs
+**Tags:** restores
 
 
 **Parameters:**
-
-- `skip` (query) — 
 
 - `limit` (query) — 
 
@@ -1834,63 +1905,18 @@ API Documentation
 ---
 
 
-## `/restore/{id}`
+## `/restores/{restore_id}`
 
 ### GET: Get Restore
 
-**Description:** 
+**Description:** Fetch a single restore operation by its id using the same DB object as the backups router.
 
-**Tags:** Restore Logs
-
-
-**Parameters:**
-
-- `id` (path) — 
-
-
-**Responses:**
-
-- `200` — Successful Response
-
-- `422` — Validation Error
-
-
----
-
-### PUT: Update Restore
-
-**Description:** 
-
-**Tags:** Restore Logs
+**Tags:** restores
 
 
 **Parameters:**
 
-- `id` (path) — 
-
-
-**Request Body Example:**
-
-
-**Responses:**
-
-- `200` — Successful Response
-
-- `422` — Validation Error
-
-
----
-
-### DELETE: Delete Restore
-
-**Description:** 
-
-**Tags:** Restore Logs
-
-
-**Parameters:**
-
-- `id` (path) — 
+- `restore_id` (path) — 
 
 
 **Responses:**
@@ -1904,25 +1930,6 @@ API Documentation
 
 
 ## `/notifications/`
-
-### POST: Create Notification
-
-**Description:** 
-
-**Tags:** Notifications
-
-
-**Request Body Example:**
-
-
-**Responses:**
-
-- `200` — Successful Response
-
-- `422` — Validation Error
-
-
----
 
 ### GET: Get Notifications
 
@@ -1950,54 +1957,7 @@ API Documentation
 ---
 
 
-## `/notifications/notify`
-
-### GET: Test Notification
-
-**Description:** 
-
-**Tags:** Notifications
-
-
-**Parameters:**
-
-- `user_id` (query) — 
-
-- `msg` (query) — 
-
-
-**Responses:**
-
-- `200` — Successful Response
-
-- `422` — Validation Error
-
-
----
-
-
 ## `/notifications/{id}`
-
-### GET: Get Notification
-
-**Description:** 
-
-**Tags:** Notifications
-
-
-**Parameters:**
-
-- `id` (path) — 
-
-
-**Responses:**
-
-- `200` — Successful Response
-
-- `422` — Validation Error
-
-
----
 
 ### DELETE: Delete Notification
 
@@ -2139,7 +2099,10 @@ API Documentation
 
 ---
 
-### PATCH: Update Feedback
+
+## `/feedbacks/{feedback_id}/reply`
+
+### POST: Reply To Feedback
 
 **Description:** 
 
@@ -2163,21 +2126,25 @@ API Documentation
 
 ---
 
-### DELETE: Delete Feedback
 
-**Description:** 
+## `/tickets/`
 
-**Tags:** Feedback
+### POST: Upload Ticket
+
+**Description:** Upload a ticket file (multipart/form-data).
+- Allowed content types: application/pdf, image/jpeg, image/png
+- Max file size: MAX_FILE_SIZE
+Returns ticket id and download URL.
+
+**Tags:** Tickets
 
 
-**Parameters:**
-
-- `feedback_id` (path) — 
+**Request Body Example:**
 
 
 **Responses:**
 
-- `204` — Successful Response
+- `201` — Successful Response
 
 - `422` — Validation Error
 
@@ -2185,21 +2152,43 @@ API Documentation
 ---
 
 
-## `/feedbacks/{feedback_id}/reply`
+## `/tickets/{ticket_id}/download`
 
-### POST: Reply To Feedback
+### GET: Download Ticket
 
-**Description:** 
+**Description:** Download ticket bytes with proper content headers.
+Returns 404 if ticket_id not found.
 
-**Tags:** Feedback
+**Tags:** Tickets
 
 
 **Parameters:**
 
-- `feedback_id` (path) — 
+- `ticket_id` (path) — 
 
 
-**Request Body Example:**
+**Responses:**
+
+- `200` — Successful Response
+
+- `422` — Validation Error
+
+
+---
+
+
+## `/tickets/{ticket_id}`
+
+### GET: Ticket Metadata
+
+**Description:** Get ticket metadata (no file content).
+
+**Tags:** Tickets
+
+
+**Parameters:**
+
+- `ticket_id` (path) — 
 
 
 **Responses:**
