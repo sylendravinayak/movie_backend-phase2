@@ -8,6 +8,7 @@ from typing import Annotated, Dict, Any
 from utils.auth.jwt_bearer import JWTBearer,getcurrent_user
 from schemas import UserRole
 from utils.tmdbclient import TMDBClient, map_tmdb_to_movie_create
+from movie_recommender.graph import  app_graph
 router = APIRouter(
     prefix="/movies", tags=["movies"]
 
@@ -157,3 +158,11 @@ def import_tmdb_movie(
     movie = movie_crud.create(db=db, obj_in=MovieCreate(**mapped))
     return movie
 
+@router.get("/recommend/{user_id}")
+def recommend(user_id: int):
+    result = app_graph.invoke({"user_id": user_id})
+
+    return {
+        "user_id": user_id,
+        "recommended_movies": [m for m in result["candidates"]]
+    }

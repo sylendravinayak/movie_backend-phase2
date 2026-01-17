@@ -1,4 +1,5 @@
 from __future__ import annotations
+from agent.infra.checkpointer import init_checkpointer, close_checkpointer
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from model.backup_restore import BackupLog, RestoreLog
@@ -46,6 +47,8 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from beanie import init_beanie
 from routers.ticket_router import router as ticket_router
 from utils.middleware.logger import setup_logging, LoggingMiddleware
+from routers.chat_router import router as chat_router
+from routers.agent_router import router as agent_router
 
 Base.metadata.create_all(bind=engine)
 logger = logging.getLogger("uvicorn.error")
@@ -209,6 +212,15 @@ async def startup_event():
 async def startup_event():
     asyncio.create_task(cleanup_task())
 
+
+@app.on_event("startup")
+def startup():
+    init_checkpointer()
+
+@app.on_event("shutdown")
+def shutdown():
+    close_checkpointer()
+       
 app.include_router(user_router)
 app.include_router(movie_router)
 app.include_router(screen_router)
@@ -231,3 +243,5 @@ app.include_router(ws_router)
 app.include_router(seatmap_router)
 app.include_router(feedback_router)
 app.include_router(ticket_router)
+app.include_router(chat_router)
+app.include_router(agent_router)

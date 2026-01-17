@@ -77,3 +77,11 @@ class RestoreStatus(str, Enum):
 class UserRole(str, Enum):
     ADMIN = "admin"
     USER = "user"
+
+
+
+class AgentRequest(BaseModel):
+    intent: str
+    show_id: int | None = None
+    input: str
+    output: str
