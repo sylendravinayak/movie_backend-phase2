@@ -80,8 +80,28 @@ class UserRole(str, Enum):
 
 
 
+
+class MovieDisplayConstraint(BaseModel):
+    movie: str
+    min_shows_per_day: Optional[int] = None
+    max_shows_per_day: Optional[int] = None
+    min_shows_per_week: Optional[int] = None
+    max_shows_per_week: Optional[int] = None
+    prime_show_quota: Optional[int] = None
+
+
 class AgentRequest(BaseModel):
-    intent: str
-    show_id: int | None = None
-    input: str
-    output: str
+
+    intent: str = Field(
+        description="forecast, scheduling, pricing, optimize, reschedule, cancel"
+    )
+
+    input: str = Field(
+        description="Natural language instruction"
+    )
+
+    show_id: Optional[int] = None
+
+    movies: Optional[List[str]] = None
+
+    display_constraints: Optional[List[MovieDisplayConstraint]] = None
