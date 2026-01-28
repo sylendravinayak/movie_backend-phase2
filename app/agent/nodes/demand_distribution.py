@@ -1,9 +1,3 @@
-"""
-Dynamic Demand Distribution
-- Learned slot patterns from historical data
-- Day-of-week specific distributions
-- Dynamic slot weights based on actual performance
-"""
 from langgraph.errors import NodeInterrupt
 from agent.state import OpsState
 from database import SessionLocal
@@ -14,23 +8,35 @@ from sqlalchemy import text, func
 from datetime import datetime, timedelta
 import numpy as np
 
+FIXED_TIME_SLOTS = [
+    "09:00",
+    "12:00",
+    "15:00",
+    "18:00",
+    "21:00"
+]
+
+SLOT_DURATION_MIN = 180
+PRIME_SLOTS = {"18:00", "21:00"}
+
 class SlotDistributor:
     """Intelligent slot-level demand distribution"""
     
     def __init__(self, db):
         self.db = db
         self.learned_weights = self._learn_slot_patterns()
+    
         
     def _learn_slot_patterns(self):
         """Learn actual slot performance from historical data"""
         
-        # Query historical slot performance
         results = self.db.execute(text("""
             SELECT 
-                TO_CHAR(s.show_time, 'HH24:MI') as slot,
+                TO_CHAR(s.show_time, 'HH24:MI') as slot_time,
                 EXTRACT(DOW FROM s.show_date) as day_of_week,
                 AVG(booked_count.cnt) as avg_bookings,
-                COUNT(*) as show_count
+                COUNT(*) as show_count,
+                STDDEV(booked_count.cnt) as booking_variance
             FROM shows s
             LEFT JOIN LATERAL (
                 SELECT COUNT(*) as cnt
@@ -39,117 +45,188 @@ class SlotDistributor:
             ) booked_count ON true
             WHERE s.show_date >= CURRENT_DATE - INTERVAL '90 days'
             AND s.status = 'COMPLETED'
-            GROUP BY slot, day_of_week
+            GROUP BY slot_time, day_of_week
             HAVING COUNT(*) >= 3
         """)).fetchall()
         
         if not results:
-            # Fallback to default patterns
             return self._default_patterns()
         
-        # Build learned patterns
-        patterns = {}
+        patterns_by_day = {}
+        metadata = {}
+        
         for row in results:
-            slot = row.slot
-            dow = int(row.day_of_week)  # 0=Sunday, 6=Saturday
+            slot_time = row.slot_time
+            normalized_slot = self._normalize_slot(slot_time)
+            dow = int(row.day_of_week)
             avg_bookings = float(row.avg_bookings or 0)
+            show_count = int(row.show_count)
+            variance = float(row.booking_variance or 0)
             
-            if slot not in patterns:
-                patterns[slot] = {}
-            patterns[slot][dow] = avg_bookings
+            if dow not in patterns_by_day:
+                patterns_by_day[dow] = {}
+            
+            if normalized_slot not in patterns_by_day[dow]:
+                patterns_by_day[dow][normalized_slot] = 0
+            patterns_by_day[dow][normalized_slot] += avg_bookings
+            
+            metadata[(normalized_slot, dow)] = {
+                'show_count': show_count,
+                'variance': variance,
+                'avg_bookings': avg_bookings
+            }
         
-        # Normalize to weights
-        for slot in patterns:
-            total = sum(patterns[slot].values()) or 1
-            for dow in patterns[slot]:
-                patterns[slot][dow] = patterns[slot][dow] / total
+        # Normalize PER DAY to preserve magnitude
+        patterns = {}
+        for dow, slots in patterns_by_day.items():
+            total = sum(slots.values()) or 1
+            for slot, value in slots.items():
+                if slot not in patterns:
+                    patterns[slot] = {}
+                patterns[slot][dow] = value / total
         
+        self.pattern_metadata = metadata
         return patterns
     
     def _default_patterns(self):
-        """Default slot distribution when no historical data"""
+        """Default slot distribution with PRIME SLOTS HEAVILY emphasized"""
         
-        # Weekday pattern (Mon-Thu): 0,1,2,3,4
-        weekday_dist = {
-            "09:00": 0.75,
-            "11:20": 0.85,
-            "13:40": 0.95,
-            "16:00": 1.05,
-            "18:20": 1.25,
-            "20:40": 1.15
+        # Weekday pattern (Mon-Thu): 1,2,3,4
+        weekday_weights = {
+            "09:00": 0.50,  # Morning - low
+            "12:00": 0.65,  # Late morning - low
+            "15:00": 0.75,  # Afternoon - moderate
+            "18:00": 0.90,  # Evening start - good
+            "21:00": 1.80,  # PRIME - DOMINANT
+            "21:00": 1.60   # PRIME - STRONG
         }
         
         # Weekend pattern (Fri-Sun): 5,6,0
-        weekend_dist = {
-            "09:00": 0.90,
-            "11:20": 1.05,
-            "13:40": 1.10,
-            "16:00": 1.15,
-            "18:20": 1.35,
-            "20:40": 1.25
+        weekend_weights = {
+            "09:00": 0.70,  # Weekend morning - better
+            "12:00": 0.95,  # Late morning - good
+            "15:00": 1.10,  # Afternoon - strong
+            "18:00": 1.30,  # Evening start - very good
+            "21:00": 2.20,  # PRIME - PEAK WEEKEND
+            "21:00": 2.00   # PRIME - PEAK WEEKEND
         }
         
         patterns = {}
-        for slot in weekday_dist:
+        for slot in weekday_weights:
             patterns[slot] = {}
-            # Weekdays
             for dow in [1, 2, 3, 4]:
-                patterns[slot][dow] = weekday_dist[slot]
-            # Weekend
+                patterns[slot][dow] = weekday_weights[slot]
             for dow in [5, 6, 0]:
-                patterns[slot][dow] = weekend_dist[slot]
+                patterns[slot][dow] = weekend_weights[slot]
         
+        self.pattern_metadata = {}
         return patterns
     
-    def get_slot_weight(self, slot: str, target_date: str) -> float:
-        """Get dynamic weight for a slot on a specific date"""
+    def is_prime_slot(self, slot: str) -> bool:
+        """Check if slot is a prime slot - NO AMBIGUITY"""
+        normalized = self._normalize_slot(slot)
+        return normalized in PRIME_SLOTS
+    
+    def _normalize_slot(self, slot: str) -> str:
+        h, m = map(int, slot.split(":"))
+        minutes = h * 60 + m
+
+        buckets = {
+            "09:00": 9*60,
+            "12:00": 12*60,
+            "15:00": 15*60,
+            "18:00": 18*60,
+            "21:00": 21*60,
+        }
+
+        return min(buckets, key=lambda k: abs(buckets[k] - minutes))
+    def get_slot_weight(self, slot: str, target_date: str) -> tuple:
+        """
+        Get dynamic weight for a slot on a specific date
+        Returns: (weight, confidence, data_quality, is_prime)
+        """
         
         dt = datetime.strptime(target_date, "%Y-%m-%d")
-        dow = dt.weekday()  # 0=Monday
-        
-        # Convert to 0=Sunday format
+        dow = dt.weekday()
         dow_sunday = (dow + 1) % 7
         
-        if slot in self.learned_weights and dow_sunday in self.learned_weights[slot]:
-            return self.learned_weights[slot][dow_sunday]
+        normalized_slot = self._normalize_slot(slot)
+        is_prime = normalized_slot in PRIME_SLOTS  # DIRECT CHECK
         
-        # Fallback
+        if normalized_slot in self.learned_weights and dow_sunday in self.learned_weights[normalized_slot]:
+            weight = self.learned_weights[normalized_slot][dow_sunday]
+            
+            metadata = self.pattern_metadata.get((normalized_slot, dow_sunday), {})
+            show_count = metadata.get('show_count', 0)
+            variance = metadata.get('variance', 0)
+            avg_bookings = metadata.get('avg_bookings', 0)
+            
+            if show_count >= 10 and avg_bookings > 0:
+                confidence = 0.9
+                data_quality = 'learned'
+            else:
+                confidence = 0.5
+                data_quality = 'learned_low_volume'
+            
+            return (weight, confidence, data_quality, is_prime)
+        
         default_weights = {
-            "09:00": 0.80,
-            "11:20": 0.90,
-            "13:40": 1.00,
-            "16:00": 1.10,
-            "18:20": 1.30,
-            "20:40": 1.20
+            "09:00": 0.50,
+            "12:00": 0.65,
+            "15:00": 0.75,
+            "18:00": 0.90,
+            "21:00": 1.80,  # Prime
+            "21:00": 1.60   # Prime
         }
-        return default_weights.get(slot, 1.0)
-    
-    def distribute_confidence(self, base_confidence: float, slot: str, 
-                             demand: float, capacity: float) -> float:
-        """Calculate slot-specific confidence"""
         
-        # Adjust based on demand/capacity ratio
-        fill_ratio = demand / max(capacity, 1)
-        
-        if fill_ratio < 0.2:
-            # Low demand = higher uncertainty
-            adj = -0.1
-        elif fill_ratio > 0.8:
-            # High demand = higher confidence
-            adj = 0.05
+        if dow_sunday in [5, 6, 0]:
+            weight = default_weights.get(normalized_slot, 1.0) * 1.25
         else:
-            adj = 0
+            weight = default_weights.get(normalized_slot, 1.0)
         
-        # Prime time slots = slight confidence boost
-        if slot in ["18:20", "20:40"]:
-            adj += 0.03
+        return (weight, 0.4, 'fallback', is_prime)
+    
+    def enforce_prime_bias(self, slot_data: dict):
+    
+        PRIME_MULTIPLIER = 1.75  # real dominance, not cosmetic
+
+        for slot, data in slot_data.items():
+            if data["is_prime"]:
+                data["weight"] *= PRIME_MULTIPLIER
+
+        return slot_data
+    def distribute_confidence(self, base_confidence: float, slot: str, 
+                             demand: float, capacity: float, data_quality: str) -> float:
+        """Calculate slot-specific confidence with capacity awareness"""
         
-        confidence = base_confidence + adj
-        return round(max(0.4, min(confidence, 0.95)), 2)
+        confidence = base_confidence
+        
+        # Data quality adjustment
+        if data_quality == 'learned':
+            confidence += 0.1
+        elif data_quality == 'fallback':
+            confidence -= 0.15
+        
+        # Capacity-aware confidence
+        if capacity > 0:
+            fill_ratio = demand / capacity
+            
+            if fill_ratio < 0.2:
+                confidence -= 0.1
+            elif 0.5 <= fill_ratio <= 0.85:
+                confidence += 0.05
+            elif fill_ratio > 1.5:
+                confidence -= 0.15
+        
+        # Prime slot boost
+        if self.is_prime_slot(slot):
+            confidence += 0.08  # Increased from 0.05
+        
+        return round(max(0.35, min(confidence, 0.95)), 2)
 
 
 def demand_distribution_node(state: OpsState):
-    """Distribute movie-day demand to slot-level with dynamic weights"""
+    """Distribute movie-day demand to slot-level with EXPLICIT prime detection"""
     
     db = SessionLocal()
     forecasts = state.get("result", {}).get("forecast", [])
@@ -158,57 +235,47 @@ def demand_distribution_node(state: OpsState):
         raise NodeInterrupt("No forecast available for distribution")
     
     screens = db.query(Screen).filter(Screen.is_available == True).all()
-    
-    # Initialize distributor
     distributor = SlotDistributor(db)
     
-    # Get dynamic time slots based on movie durations
-    from agent.tools.slot_calculator import get_dynamic_time_slots
-    from model import Movie
     
-    movies = db.query(Movie).all()
-    TIME_SLOTS = get_dynamic_time_slots(movies)
     
-    if not TIME_SLOTS:
-        # Fallback to standard slots
-        TIME_SLOTS = ["09:00", "11:20", "13:40", "16:00", "18:20", "20:40"]
+    TIME_SLOTS = FIXED_TIME_SLOTS.copy()
     
-    # Normalize capacity constraints
-    total_capacity = sum(
-        db.query(Seat).filter(Seat.screen_id == s.screen_id).count()
-        for s in screens
-    )
     
-    slots_per_day = len(TIME_SLOTS)
+    # Calculate REALISTIC capacity per slot
+    total_capacity_per_slot = sum(
+    db.query(Seat).filter(Seat.screen_id == s.screen_id).count()
+    for s in screens
+    ) 
+    
     distributed = []
     
     for f in forecasts:
         movie_day_demand = f.get("movie_day_demand", 0)
-        base_confidence = f.get("confidence", 0.7)
         
         if not movie_day_demand:
             continue
         
         # Get dynamic weights for this date
-        date_weights = {}
+        slot_data = {}
         for slot in TIME_SLOTS:
-            date_weights[slot] = distributor.get_slot_weight(slot, f["date"])
+            weight, slot_confidence, data_quality, is_prime = distributor.get_slot_weight(slot, f["date"])
+            slot_data[slot] = {
+                'weight': weight,
+                'confidence': slot_confidence,
+                'data_quality': data_quality,
+                'is_prime': is_prime  # EXPLICIT FLAG
+            }
         
-        total_weight = sum(date_weights.values())
+        slot_data = distributor.enforce_prime_bias(slot_data)
+        total_weight = sum(data['weight'] for data in slot_data.values())
         
-        # Distribute demand
+        # Distribute demand proportionally
         for slot in TIME_SLOTS:
-            slot_weight = date_weights[slot]
+            slot_info = slot_data[slot]
+            slot_weight = slot_info['weight']
             slot_demand = movie_day_demand * (slot_weight / total_weight)
             
-            # Cap at physical capacity per slot
-            max_slot_capacity = total_capacity
-            slot_demand = min(slot_demand, max_slot_capacity)
-            
-            # Calculate slot-specific confidence
-            slot_confidence = distributor.distribute_confidence(
-                base_confidence, slot, slot_demand, max_slot_capacity
-            )
             
             distributed.append({
                 "movie_id": f["movie_id"],
@@ -217,21 +284,20 @@ def demand_distribution_node(state: OpsState):
                 "slot": slot,
                 "slot_expected_demand": round(slot_demand, 2),
                 "movie_day_demand": movie_day_demand,
-                "confidence": slot_confidence,
                 "slot_weight": round(slot_weight, 2),
-                "velocity": f.get("velocity", 1.0),
-                "trend": f.get("trend", 1.0),
-                "competition": f.get("competition", 0.5),
+                "demand_share": round(slot_weight / total_weight, 3),
+                "data_quality": slot_info['data_quality'],
+                "is_prime_slot": slot_info['is_prime'],  # EXPLICIT
+                "velocity": f.get("velocity"),
+                "trend": f.get("trend"),
+                "competition": f.get("competition"),
                 "forecast_method": f.get("forecast_method", "unknown")
             })
     
     db.close()
     
+ 
     state["result"]["forecast"] = distributed
     state["forecast_scope"] = "slot_level"
-    state["output"] = (
-        f"Distributed {len(forecasts)} movie-days → {len(distributed)} slot-level forecasts "
-        f"using learned patterns."
-    )
-    
+  
     return state

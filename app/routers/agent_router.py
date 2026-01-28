@@ -11,7 +11,9 @@ def operate(req: AgentRequest):
     state = {
         "intent": req.intent,
         "show_id": req.show_id,
+        "movies": req.movies,
         "input": req.input,
+        "display_constraints": req.display_constraints or [],
         "decision": {},
         "result": {}
     }

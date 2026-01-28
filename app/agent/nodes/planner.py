@@ -69,7 +69,7 @@ def planner_node(state: OpsState):
     state["decision"] = decision_dict
     print( "Planner decision:", decision_dict )
     state["show_id"]= decision.show_id
-    state["movies"]= decision.movies
+
     state["correction_map"] = correction_map
     db.close()
     return state

@@ -1,9 +1,10 @@
 """
-Production-Ready Rescheduling
+Production-Ready Rescheduling with Constraint Enforcement
 - Swap underperforming prime slots with high-demand off-prime
 - Considers revenue impact
-- Maintains constraints
+- Maintains MongoDB and user constraints
 - Safe time swapping
+- Screen allocation constraints
 """
 from datetime import date, timedelta, time, datetime
 from collections import defaultdict
@@ -12,6 +13,7 @@ from model import Show, Seat, ShowCategoryPricing
 from model.theatre import ShowStatusEnum
 from model.seat import SeatLock, SeatLockStatusEnum
 from agent.state import OpsState
+from agent.tools.constraint_manager import ConstraintManager
 from sqlalchemy import text
 
 PRIME_START = time(18, 0)
@@ -56,9 +58,63 @@ def get_show_potential_revenue(show_id: int, db) -> float:
     return float(potential or 0)
 
 
+def get_screen_name(screen_id: int, db) -> str:
+    """Get screen name from screen_id"""
+    from model.theatre import Screen
+    screen = db.query(Screen).filter(Screen.screen_id == screen_id).first()
+    return screen.screen_name if screen else f"Screen{screen_id}"
+
+
+def is_screen_allowed(movie_id: str, screen_name: str, merged_constraints: dict) -> bool:
+    """Check if screen is allowed for this movie"""
+    if movie_id not in merged_constraints:
+        return True
+    
+    constraints = merged_constraints[movie_id]
+    allowed_screens = constraints.get("allowed_screens", [])
+    
+    if not allowed_screens:
+        return True  # No restrictions
+    
+    return screen_name in allowed_screens
+
+
+def can_swap_screens(show1: Show, show2: Show, merged_constraints: dict, db) -> tuple:
+    """
+    Check if two shows can swap screens based on constraints
+    Returns: (can_swap: bool, reason: str)
+    """
+    movie1_id = str(show1.movie_id)
+    movie2_id = str(show2.movie_id)
+    
+    screen1_name = get_screen_name(show1.screen_id, db)
+    screen2_name = get_screen_name(show2.screen_id, db)
+    
+    # Check if movie1 can go to screen2
+    if not is_screen_allowed(movie1_id, screen2_name, merged_constraints):
+        return False, f"Movie {show1.movie.title} not allowed on {screen2_name}"
+    
+    # Check if movie2 can go to screen1
+    if not is_screen_allowed(movie2_id, screen1_name, merged_constraints):
+        return False, f"Movie {show2.movie.title} not allowed on {screen1_name}"
+    
+    # Check if screen change is allowed
+    if movie1_id in merged_constraints:
+        constraints1 = merged_constraints[movie1_id]
+        if not constraints1.get("screen_change_allowed", True):
+            return False, f"Screen change not allowed for {show1.movie.title}"
+    
+    if movie2_id in merged_constraints:
+        constraints2 = merged_constraints[movie2_id]
+        if not constraints2.get("screen_change_allowed", True):
+            return False, f"Screen change not allowed for {show2.movie.title}"
+    
+    return True, "Screen swap allowed"
+
+
 def reschedule_node(state: OpsState):
     """
-    Intelligent rescheduling with revenue optimization
+    Intelligent rescheduling with revenue optimization and constraint enforcement
     """
     db = SessionLocal()
     tomorrow = date.today() + timedelta(days=1)
@@ -69,7 +125,11 @@ def reschedule_node(state: OpsState):
         if s.get("show_id") and s.get("date") == str(tomorrow):
             forecast_map[s["show_id"]] = s
     
-    # Get constraints
+    # Get merged constraints
+    merged_constraints = state.get("merged_constraints", {})
+    manager = ConstraintManager(db)
+    
+    # Get user constraints for fallback
     constraint_map = {
         c["movie"]: c
         for c in state.get("display_constraints", []) or []
@@ -96,6 +156,7 @@ def reschedule_node(state: OpsState):
     touched = set()
     result = []
     total_revenue_impact = 0
+    constraint_violations_prevented = 0
     
     for show in shows:
         if show.show_id in touched:
@@ -130,7 +191,7 @@ def reschedule_node(state: OpsState):
         gap = forecast_occ - current_occ
         is_prime = PRIME_START <= show.show_time <= PRIME_END
         
-        # Get movie constraints
+        # Get movie details
         movie = db.query(Show).join(Show.movie).filter(
             Show.show_id == show.show_id
         ).first()
@@ -139,7 +200,24 @@ def reschedule_node(state: OpsState):
             continue
         
         movie_name = movie.movie.title
-        min_shows = constraint_map.get(movie_name, {}).get("min_shows_per_day", 0)
+        movie_id = str(movie.movie.movie_id)
+        
+        # Get merged constraints for this movie
+        merged = None
+        if movie_id in merged_constraints:
+            merged = merged_constraints[movie_id]
+        
+        # Extract constraint values
+        if merged:
+            min_shows = merged.get("min_shows_per_day", 0)
+            show_reduction_allowed = merged.get("show_reduction_allowed", True)
+            prime_time_required = merged.get("prime_time_required", False)
+        else:
+            # Fallback to user constraints
+            user_constraints = constraint_map.get(movie_name, {})
+            min_shows = user_constraints.get("min_shows_per_day", 0)
+            show_reduction_allowed = True
+            prime_time_required = False
         
         # Get current revenue
         current_revenue = get_show_revenue(show.show_id, db)
@@ -149,7 +227,21 @@ def reschedule_node(state: OpsState):
         if (gap < UNDERPERFORM_GAP and 
             current_occ < MIN_BOOKING_RATIO and
             daily_count[show.movie_id] > min_shows and
-            current_revenue < potential_revenue * 0.1):  # Less than 10% revenue potential
+            show_reduction_allowed and  # Check constraint
+            current_revenue < potential_revenue * 0.1):
+            
+            # Additional check: if prime_time_required, don't cancel prime shows
+            if prime_time_required and is_prime:
+                constraint_violations_prevented += 1
+                result.append({
+                    "show_id": show.show_id,
+                    "movie": movie_name,
+                    "action": "skip_cancellation",
+                    "reason": "prime_time_required constraint prevents cancellation",
+                    "gap": round(gap, 2),
+                    "current_occ": round(current_occ, 2)
+                })
+                continue
             
             show.status = ShowStatusEnum.CANCELLED
             daily_count[show.movie_id] -= 1
@@ -185,6 +277,19 @@ def reschedule_node(state: OpsState):
             # Sort by underperformance
             prime_candidates_scored = []
             for prime_show in prime_candidates:
+                # Check if the underperforming prime show has prime_time_required
+                prime_movie_id = str(prime_show.movie_id)
+                prime_movie_name = prime_show.movie.title
+                
+                prime_has_requirement = False
+                if prime_movie_id in merged_constraints:
+                    prime_has_requirement = merged_constraints[prime_movie_id].get("prime_time_required", False)
+                
+                # Skip if prime show MUST be in prime time
+                if prime_has_requirement:
+                    constraint_violations_prevented += 1
+                    continue
+                
                 prime_forecast = forecast_map[prime_show.show_id]
                 prime_demand = prime_forecast.get("forecast_demand", 0)
                 
@@ -216,7 +321,20 @@ def reschedule_node(state: OpsState):
                 revenue_gain = (estimated_new_prime_revenue + estimated_new_offprime_revenue) - \
                               (current_prime_revenue + current_offprime_revenue)
                 
-                prime_candidates_scored.append((prime_gap, revenue_gain, prime_show))
+                # Check if screen swap is allowed
+                can_swap, swap_reason = can_swap_screens(show, prime_show, merged_constraints, db)
+                
+                if can_swap:
+                    prime_candidates_scored.append((prime_gap, revenue_gain, prime_show))
+                else:
+                    constraint_violations_prevented += 1
+                    result.append({
+                        "show_id": show.show_id,
+                        "movie": movie_name,
+                        "action": "skip_promotion",
+                        "reason": f"Screen constraint: {swap_reason}",
+                        "gap": round(gap, 2)
+                    })
             
             if prime_candidates_scored:
                 # Pick best candidate (most underperforming or best revenue gain)
@@ -241,6 +359,7 @@ def reschedule_node(state: OpsState):
                         "movie": movie_name,
                         "action": "promoted_to_prime",
                         "swapped_with": prime_show.show_id,
+                        "swapped_with_movie": prime_show.movie.title,
                         "old_time": str(t1),
                         "new_time": str(t2),
                         "gap": round(gap, 2),
@@ -252,8 +371,21 @@ def reschedule_node(state: OpsState):
                     total_revenue_impact += revenue_gain
                     continue
         
-       
+        # =============== RULE 3: DEMOTE FROM PRIME TIME ===============
         if gap < UNDERPERFORM_GAP and is_prime:
+            # Check if this movie MUST be in prime time
+            if prime_time_required:
+                constraint_violations_prevented += 1
+                result.append({
+                    "show_id": show.show_id,
+                    "movie": movie_name,
+                    "action": "skip_demotion",
+                    "reason": "prime_time_required constraint prevents demotion",
+                    "gap": round(gap, 2),
+                    "current_occ": round(current_occ, 2)
+                })
+                continue
+            
             # Find high-demand off-prime slot
             offprime_candidates = [
                 s for s in shows
@@ -282,9 +414,14 @@ def reschedule_node(state: OpsState):
                 offprime_forecast_occ = offprime_demand / offprime_total_seats
                 offprime_gap = offprime_forecast_occ - offprime_occ
                 
+                # Check if screen swap is allowed
+                can_swap, swap_reason = can_swap_screens(show, offprime_show, merged_constraints, db)
+                
                 # Prefer high-demand off-prime shows
-                if offprime_gap > 0.15:
+                if offprime_gap > 0.15 and can_swap:
                     offprime_candidates_scored.append((offprime_gap, offprime_show))
+                elif not can_swap:
+                    constraint_violations_prevented += 1
             
             if offprime_candidates_scored:
                 offprime_candidates_scored.sort(key=lambda x: -x[0])
@@ -306,6 +443,7 @@ def reschedule_node(state: OpsState):
                     "movie": movie_name,
                     "action": "demoted_from_prime",
                     "swapped_with": offprime_show.show_id,
+                    "swapped_with_movie": offprime_show.movie.title,
                     "old_time": str(t1),
                     "new_time": str(t2),
                     "gap": round(gap, 2),
@@ -320,16 +458,30 @@ def reschedule_node(state: OpsState):
     state.setdefault("result", {})
     state["result"]["reschedule"] = result
     state["result"]["reschedule_revenue_impact"] = round(total_revenue_impact, 2)
+    state["result"]["constraint_violations_prevented"] = constraint_violations_prevented
     
     actions = defaultdict(int)
     for r in result:
         actions[r["action"]] += 1
     
+    # Build detailed output
+    output_parts = []
+    
+    if actions["cancelled"] > 0:
+        output_parts.append(f"{actions['cancelled']} cancelled")
+    if actions["promoted_to_prime"] > 0:
+        output_parts.append(f"{actions['promoted_to_prime']} promoted")
+    if actions["demoted_from_prime"] > 0:
+        output_parts.append(f"{actions['demoted_from_prime']} demoted")
+    
+    skipped = actions["skip_cancellation"] + actions["skip_promotion"] + actions["skip_demotion"]
+    if skipped > 0:
+        output_parts.append(f"{skipped} skipped (constraints)")
+    
     state["output"] = (
-        f"Rescheduling: {actions['cancelled']} cancelled, "
-        f"{actions['promoted_to_prime']} promoted, "
-        f"{actions['demoted_from_prime']} demoted. "
-        f"Revenue impact: ₹{round(total_revenue_impact, 2)}"
+        f"Rescheduling: {', '.join(output_parts) if output_parts else 'No changes'}. "
+        f"Revenue impact: ₹{round(total_revenue_impact, 2)}. "
+        f"Constraint violations prevented: {constraint_violations_prevented}"
     )
     
     return state
