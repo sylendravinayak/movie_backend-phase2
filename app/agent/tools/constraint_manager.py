@@ -31,7 +31,7 @@ class MergedConstraints(BaseModel):
     end_date: Optional[date] = None
     
     # Source tracking
-    constraints_source: str  # "mongodb", "user", "merged"
+    constraints_source: str  
 
 
 class ConstraintManager:

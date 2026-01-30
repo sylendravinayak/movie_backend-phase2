@@ -1,7 +1,7 @@
 from datetime import date, timedelta, datetime
 from sqlalchemy import text
 from database import SessionLocal
-from model import Movie
+from model import Movie,Screen
 from agent.state import OpsState
 from agent.tools.booking_history_tool import get_daily_booking_series
 from agent.tools.external_signals import fetch_all_external_signals, TrendAnalyzer, HolidayCalendar, get_trend_factor
@@ -18,13 +18,8 @@ from langchain_core.messages import HumanMessage
 from langchain_groq import ChatGroq
 
 warnings.filterwarnings('ignore')
+from prophet import Prophet
 
-try:
-    from prophet import Prophet
-    PROPHET_AVAILABLE = True
-except ImportError:
-    PROPHET_AVAILABLE = False
-    print("Warning: Prophet not available. Using LLM-only forecasting.")
 
 FORECAST_DAYS = 7
 
@@ -330,7 +325,7 @@ class HybridProphetLLMForecaster:
                             daily_physical_cap: int) -> Optional[pd.DataFrame]:
         """Run Prophet forecast and return predictions"""
         
-        if not PROPHET_AVAILABLE or len(df) < 7:
+        if len(df) < 7:
             return None
         
         try:
@@ -660,7 +655,7 @@ class HybridProphetLLMForecaster:
 
 def demand_forecast_node(state: OpsState):
     """Hybrid Prophet + LLM forecasting with constraint awareness"""
-    
+    forecast_days=state['forecast_days']
     db = SessionLocal()
     
     try:
@@ -691,7 +686,14 @@ def demand_forecast_node(state: OpsState):
         
         daily_physical_cap = int(total_seats * avg_shows_per_day * 1.2)
         requested_movies = set(state.get("movies") or [])
-        
+        max_screen_capacity = max(
+    db.execute(
+        text("SELECT COUNT(*) FROM seats WHERE screen_id = :sid"),
+        {"sid": screen.screen_id}
+    ).scalar() or 100
+    for screen in db.query(Screen).filter(Screen.is_available == True).all()
+)      
+
         # Calculate competition pressure
         movie_totals = {}
         for m in movies:
@@ -737,7 +739,7 @@ def demand_forecast_node(state: OpsState):
                 base_fill_ratio = 0.30 + min((trend_factor - 1.0) * 0.25, 0.15)
                 base_fill_ratio = np.clip(base_fill_ratio, 0.25, 0.50)
 
-                for i in range(FORECAST_DAYS):
+                for i in range(forecast_days):
                     forecast_date = start_date + timedelta(days=i)
                     dow = forecast_date.weekday()
                     day_multiplier = {0: 0.95, 1: 0.92, 2: 0.90, 3: 0.92, 4: 1.20, 5: 1.30, 6: 1.22}[dow]
@@ -767,13 +769,11 @@ def demand_forecast_node(state: OpsState):
                 
                 continue
             
-            # ===== HYBRID FORECAST (Prophet + LLM) =====
             forecast_df = forecaster.hybrid_forecast(
-                raw_history, movie.title, FORECAST_DAYS, 
+                raw_history, movie.title, forecast_days, 
                 pressure, daily_physical_cap, start_date, velocity
             )
             
-            # Determine method based on what was used
             if 'prophet_weight' in forecast_df.columns and forecast_df['prophet_weight'].iloc[0] > 0:
                 method = "hybrid_prophet_llm"
             elif 'llm_confidence' in forecast_df.columns and pd.notna(forecast_df['llm_confidence'].iloc[0]):

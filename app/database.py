@@ -3,9 +3,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from motor.motor_asyncio import AsyncIOMotorClient
-from model.backup_restore import BackupLog,RestoreLog
-from model.notification import Notification
-from model.cms import CMSContent
+#from model.backup_restore import BackupLog,RestoreLog
+#from model.notification import Notification
+#from model.cms import CMSContent
 import os
 from dotenv import load_dotenv
 
@@ -29,7 +29,7 @@ db = client["mydb"]
 async def init_mongo():
     await init_beanie(
         database=db,
-        document_models=[BackupLog, RestoreLog, Notification, CMSContent]  
+        #document_models=[BackupLog, RestoreLog, Notification, CMSContent]  
     )
 
 def get_mongo_db():

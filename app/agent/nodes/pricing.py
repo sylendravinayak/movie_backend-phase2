@@ -46,7 +46,7 @@ def calculate_demand_surge(current_occ: float) -> float:
     Returns: multiplier in range [0.7, 1.5]
     """
     
-    effective_occ = min(current_occ,1.0)
+    effective_occ = min(current_occ,1.2)
     
     if effective_occ >= HIGH_DEMAND_THRESHOLD:
         surge = 1.0 + (effective_occ - HIGH_DEMAND_THRESHOLD) * 2.0
@@ -83,17 +83,52 @@ def get_day_multiplier(show_date: datetime.date) -> float:
 def pricing_node(state: OpsState):
     """Intelligent bidirectional dynamic pricing"""
     
+    # --- normalize show_forecast -> scheduling (INLINE) ---
+    result = state.get("result", {})
+    show_forecast = result.get("show_forecast")
+
+    if show_forecast:
+        scheduling = []
+        show_ids = set(state.get("show_ids", []))
+
+        for item in show_forecast:
+            scheduling.append({
+                "show_id": item["show_id"],
+                "forecast_demand": item["forecast_demand"],
+                "confidence": item.get("confidence", 1.0),
+                "is_prime": item.get("is_prime", False),
+                "source": item.get("source"),
+            })
+            show_ids.add(item["show_id"])
+
+        # inject in the exact place pricing already reads from
+        result["scheduling"] = scheduling
+        state["result"] = result
+        state["show_ids"] = list(show_ids)
+# --- end normalization ---
+    intent = state.get("intent")
+
+    rescheduled_ids = {
+        r["show_id"]
+        for r in state.get("result", {}).get("reschedule", [])
+        if r.get("show_id")
+    }
+    
+    if intent == "optimize" and not rescheduled_ids:
+        state["result"]["pricing"] = []
+        return state
+
     db = SessionLocal()
     
-    show_ids = set()
-    show_ids.update(state.get("show_ids", []))
-    if state.get("show_id"):
-        show_ids.add(state["show_id"])
-    show_ids.update(state.get("result", {}).get("scheduled_show_ids", []))
-    
-    for r in state.get("result", {}).get("reschedule", []):
-        if r.get("show_id"):
-            show_ids.add(r["show_id"])
+    if intent == "optimize" and rescheduled_ids:
+        show_ids = list(rescheduled_ids)
+    else:
+        
+        show_ids = set(state.get("show_ids", []))
+        if state.get("show_id"):
+            show_ids.add(state["show_id"])
+        show_ids.update(state.get("result", {}).get("scheduled_show_ids", []))
+        show_ids = list(show_ids)
     
     show_ids = list(show_ids)
     
@@ -109,15 +144,16 @@ def pricing_node(state: OpsState):
             forecast_map[sched["show_id"]] = sched
     
     pricing_results = []
+    processed_show_ids = set()
     price_increases = 0
     price_decreases = 0
+    state["result"]["pricing"] = []
     
     for show_id in show_ids:
-        show = db.query(Show).filter(Show.show_id == show_id).first()
-        if not show:
+        if show_id in processed_show_ids:
             continue
+        show = db.query(Show).filter(Show.show_id == show_id).first()
         
-        # Get capacity
         capacity = db.execute(text("""
             SELECT COUNT(*) FROM seats WHERE screen_id = :sid
         """), {"sid": show.screen_id}).scalar() or 1
@@ -174,13 +210,16 @@ def pricing_node(state: OpsState):
         
         # Update prices
         updates = []
+        any_increase = False
+        any_decrease = False
         for row in pricing_rows:
             base_price = db.query(SeatCategory.base_price).filter(
                 SeatCategory.category_id == row.category_id
             ).scalar() or row.price
             
             old_price = float(row.price)
-            new_price = base_price * price_multiplier
+            target_price = base_price * price_multiplier
+            new_price = target_price
             
             # Round to nearest 5
             if abs(new_price - old_price) >= 10:
@@ -195,8 +234,10 @@ def pricing_node(state: OpsState):
             # Track direction
             if new_price > old_price:
                 price_increases += 1
+                any_increase = True
             elif new_price < old_price:
                 price_decreases += 1
+                any_decrease = True
             
             row.price = new_price
             
@@ -207,7 +248,13 @@ def pricing_node(state: OpsState):
                 "new_price": new_price,
                 "change_pct": round(((new_price - old_price) / old_price) * 100, 1) if old_price > 0 else 0
             })
-        
+
+        if any_increase:
+            pricing_action = "increase"
+        elif any_decrease:
+            pricing_action = "decrease"
+        else:
+            pricing_action = "hold"
         pricing_results.append({
             "show_id": show_id,
             "forecast_demand": round(forecast_demand, 2),
@@ -221,18 +268,16 @@ def pricing_node(state: OpsState):
             "price_multiplier": round(price_multiplier, 2),
             "hours_until_show": round((show_datetime - datetime.now()).total_seconds() / 3600, 1),
             "pricing_updates": updates,
-            "pricing_action": "increase" if price_multiplier > 1.05 else "decrease" if price_multiplier < 0.95 else "hold"
+            "pricing_action": pricing_action
         })
     
     db.commit()
     db.close()
     
     state.setdefault("result", {})
-    state["result"]["pricing"] = pricing_results
-    state["output"] = (
-        f"Dynamic pricing: {price_increases} increases, {price_decreases} decreases, "
-        f"{len(pricing_results) - price_increases - price_decreases} holds. "
-        f"Total: {len(pricing_results)} shows."
-    )
+    state["result"]["pricing"] = list(
+    {p["show_id"]: p for p in pricing_results}.values()
+)
+    
     
     return state

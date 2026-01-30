@@ -96,12 +96,10 @@ class AgentRequest(BaseModel):
         description="forecast, scheduling, pricing, optimize, reschedule, cancel"
     )
 
-    input: str = Field(
-        description="Natural language instruction"
-    )
-
     show_id: Optional[int] = None
 
     movies: Optional[List[str]] = None
 
     display_constraints: Optional[List[MovieDisplayConstraint]] = None
+
+    forecast_days: Optional[int] = Field(14, description="Number of days to forecast")
